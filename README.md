@@ -10,6 +10,7 @@ The interface is in **Myanmar (default) and English** — switch with the မြ
 | `FreshMart.LicenseServer/` | Your admin panel and licence server: shops, plans, device and cashier limits (see `LICENSING.md`) |
 | `FreshMart.Licensing/` | Signed-licence format shared by the app and the server |
 | `INSTALL.md`, `build-release.ps1`, `installer/` | Building release files and installing on clients' devices |
+| `deploy/` | Putting the licence server on a VPS (Z.com guide, setup/update/backup scripts) |
 | `pos.html` | Original single-file browser prototype (kept for reference) |
 | `PROJECT_PLAN.md` | Scope, timeline, risks, acceptance criteria |
 

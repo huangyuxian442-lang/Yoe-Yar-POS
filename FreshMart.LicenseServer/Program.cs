@@ -5,6 +5,7 @@ using FreshMart.LicenseServer.Data;
 using FreshMart.Licensing;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 
@@ -30,6 +31,11 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         o.Cookie.SameSite = SameSiteMode.Strict;
     });
 builder.Services.AddAuthorization();
+// keeps admins signed in across restarts and updates; hosted servers keep these outside the app folder
+builder.Services.AddDataProtection()
+    .SetApplicationName("YoeYarLicenseServer")
+    .PersistKeysToFileSystem(new DirectoryInfo(builder.Configuration["DataProtection:KeysPath"]
+        ?? Path.Combine(builder.Environment.ContentRootPath, "App_Data", "dp-keys")));
 builder.Services.AddRateLimiter(o =>
 {
     // devices and login: slows down anyone guessing shop codes or passwords

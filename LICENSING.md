@@ -53,6 +53,9 @@ The app talks to `http://localhost:5080` by default. Override it with the `FRESH
 
 ## Before you sell — hosting checklist
 
+**Using Z.com Cloud VPS (paid in kyat):** follow `deploy/ZCOM-GUIDE.md`. `deploy/publish-server.ps1` does steps 2 and 4
+below for you (PostgreSQL, HTTPS, service, nightly backups). The same scripts work on any Ubuntu VPS.
+
 1. **Back up `FreshMart.LicenseServer/App_Data/license-signing-key.pem`** (two offline copies). Every app trusts this key.
    If it's lost, you must ship a new app version to every shop. If it leaks, anyone can make licences.
    Never put it in a public repository.

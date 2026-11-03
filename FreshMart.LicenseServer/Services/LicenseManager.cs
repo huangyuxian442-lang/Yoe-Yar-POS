@@ -17,6 +17,9 @@ public sealed class SigningKey : IDisposable
     {
         Path = System.IO.Path.GetFullPath(config["License:SigningKeyPath"] ?? "App_Data/license-signing-key.pem", env.ContentRootPath);
         if (File.Exists(Path)) Key.ImportFromPem(File.ReadAllText(Path));
+        else if (config.GetValue<bool>("License:RequireExistingKey"))
+            // a hosted server must use the key the apps already trust; a new one would make every licence invalid
+            throw new FileNotFoundException($"Licence signing key not found at {Path}. Copy license-signing-key.pem there.", Path);
         else
         {
             Key.GenerateKey(ECCurve.NamedCurves.nistP256);
