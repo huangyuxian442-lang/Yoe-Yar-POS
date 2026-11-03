@@ -1,0 +1,298 @@
+@page "/debts"
+@inject PosService Pos
+@inject UiService Ui
+@inject AuthService Auth
+@inject FileService Files
+@inject Loc L
+@inject IJSRuntime JS
+
+<section class="page">
+    <div class="cards">
+        <div class="card"><div class="k">@L["total_outstanding"]</div><div class="v">@Fmt.Money(Owing.Sum(d => d.Balance))</div><div class="s">@L.F("n_customers", Owing.Count())</div></div>
+        <div class="card bad"><div class="k">@L["overdue"]</div><div class="v">@Fmt.Money(Owing.Where(d => d.IsOverdue).Sum(d => d.Balance))</div><div class="s">@L.F("n_customers", Owing.Count(d => d.IsOverdue))</div></div>
+        <div class="card"><div class="k">@L["due_today"]</div><div class="v">@Fmt.Money(Owing.Where(d => d.DueToday).Sum(d => d.Balance))</div><div class="s">@L.F("n_customers", Owing.Count(d => d.DueToday))</div></div>
+        <div class="card good"><div class="k">@L["collected_today"]</div><div class="v">@Fmt.Money(_collectedToday)</div></div>
+    </div>
+
+    <div class="toolbar">
+        <input class="filter" placeholder="@L["search_name_phone"]" @bind="_q" @bind:event="oninput" />
+        <div class="chips">
+            @foreach (var f in new[] { "all", "overdue", "daily", "weekly", "monthly" })
+            {
+                <button class="@(_filter == f ? "active" : "")" @onclick="() => _filter = f">@L["filter_" + f]</button>
+            }
+        </div>
+        <label class="check"><input type="checkbox" @bind="_showSettled" /> @L["show_settled"]</label>
+    </div>
+
+    <div class="debt-list">
+        @foreach (var d in Rows)
+        {
+            <div class="debt-row @(d.IsOverdue ? "overdue" : d.DueToday ? "today" : "")">
+                <div class="dr-who">
+                    <div class="dr-name">@d.Customer.Name @if (d.Customer.IsWholesale) { <span class="badge ctn">@L["wholesale"]</span> }</div>
+                    <div class="meta">@d.Customer.Phone · <span class="badge term">@L.Term(d.Customer.Term)</span></div>
+                </div>
+                <div class="dr-status">
+                    @if (d.Balance <= 0) { <span class="badge">@L["settled"]</span> }
+                    else if (d.IsOverdue) { <span class="badge danger">@L.F("overdue_days", d.OverdueDays)</span> }
+                    else if (d.DueToday) { <span class="badge warn">@L["due_today"]</span> }
+                    else if (d.OldestDue is { } due) { <span class="meta">@L["due_date"]: @due.ToString("dd-MM")</span> }
+                    @if (d.LastPayment is { } lp) { <div class="meta">@L["last_paid"]: @lp.ToString("dd-MM")</div> }
+                </div>
+                <div class="dr-bal num">@Fmt.Money(d.Balance)</div>
+                <div class="dr-actions">
+                    <button disabled="@(d.Balance <= 0)" @onclick="() => OpenReminderAsync(d)">📤 @L["reminder"]</button>
+                    <button @onclick="() => OpenLedgerAsync(d.Customer)">@L["statement"]</button>
+                    <button class="primary" disabled="@(d.Balance <= 0)" @onclick="() => OpenReceive(d)">@L["receive_payment"]</button>
+                </div>
+            </div>
+        }
+        @if (!Rows.Any()) { <div class="empty">@L["no_debts"]</div> }
+    </div>
+</section>
+
+@* ---------- receive payment ---------- *@
+<Modal @bind-Open="_recvOpen" Title="@L["receive_payment"]">
+    <ChildContent>
+        @if (_recv is not null)
+        {
+            <div class="pay-customer"><span>👤 <b>@_recv.Customer.Name</b> · @L.Term(_recv.Customer.Term)</span></div>
+            <div class="due"><small>@L["balance"]</small><br />@Fmt.Money(_recv.Balance)</div>
+            <div class="methods two-col">
+                @foreach (var m in new[] { "Cash", "Mobile" })
+                {
+                    <button class="@(m == _recvMethod ? "active" : "")" @onclick="() => _recvMethod = m">@L.Method(m)</button>
+                }
+            </div>
+            <label>@L["amount_received"]</label>
+            <input id="recvAmount" class="big" type="number" min="0" @bind="_recvAmount" @bind:event="oninput"
+                   @onkeydown="@(e => e.Key == "Enter" ? ReceiveAsync() : Task.CompletedTask)" />
+            <div class="quick">
+                <button @onclick="() => _recvAmount = _recv.Balance">@L["pay_all"]</button>
+                <button @onclick="() => _recvAmount = PosMath.Money(_recv.Balance / 2)">@L["half"]</button>
+            </div>
+            <label style="margin-top:10px">@L["note"]</label>
+            <input @bind="_recvNote" placeholder="@L["note_placeholder"]" />
+            <div class="pay-summary">
+                <div class="ps paid"><span>@L["receive"]</span><b>@Fmt.Money(_recvAmount ?? 0)</b></div>
+                <div class="ps credit @(Remaining > 0 ? "on" : "")"><span>@L["remaining"]</span><b>@Fmt.Money(Remaining)</b></div>
+            </div>
+        }
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _recvOpen = false">@L["cancel"]</button>
+        <button class="primary" disabled="@(_busy || (_recvAmount ?? 0) <= 0)" @onclick="ReceiveAsync">@L["confirm_payment"]</button>
+    </Actions>
+</Modal>
+
+@* ---------- payment slip ---------- *@
+<Modal @bind-Open="_slipOpen">
+    <ChildContent>
+        @if (_slip is not null)
+        {
+            <div id="receipt">
+                <div class="c"><b>@Pos.Settings.Name</b><br />@Pos.Settings.Address</div>
+                <hr />
+                <div class="c"><b>@L["payment_slip"]</b></div>
+                <div class="r"><span>@L["date"]</span><span>@_slip.Value.At.ToString("dd-MM-yyyy HH:mm")</span></div>
+                <div class="r"><span>@L["customer"]</span><span>@_slip.Value.Name</span></div>
+                <hr />
+                <div class="r"><span>@L["prev_balance"]</span><span>@Fmt.Money(_slip.Value.Before)</span></div>
+                <div class="r big"><b>@L["received"] (@L.Method(_slip.Value.Method))</b><b>@Fmt.Money(_slip.Value.Amount)</b></div>
+                <div class="r"><b>@L["remaining"]</b><b>@Fmt.Money(_slip.Value.Before - _slip.Value.Amount)</b></div>
+                <hr />
+                <div class="c">@Pos.Settings.Footer</div>
+            </div>
+        }
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _slipOpen = false">@L["close"]</button>
+        <button class="primary" @onclick="@(() => JS.InvokeVoidAsync("pos.print").AsTask())">@L["print"]</button>
+    </Actions>
+</Modal>
+
+@* ---------- statement / ledger ---------- *@
+<Modal @bind-Open="_ledgerOpen">
+    <ChildContent>
+        @if (_ledgerCustomer is not null)
+        {
+            <div id="receipt" class="statement">
+                <div class="c"><b>@Pos.Settings.Name</b><br />@L["statement"]</div>
+                <hr />
+                <div class="r"><span>@L["customer"]</span><span>@_ledgerCustomer.Name</span></div>
+                <div class="r"><span>@L["phone"]</span><span>@_ledgerCustomer.Phone</span></div>
+                <div class="r"><span>@L["credit_term"]</span><span>@L.Term(_ledgerCustomer.Term)</span></div>
+                <hr />
+                <table class="ledger">
+                    <thead><tr><th>@L["date"]</th><th>@L["detail"]</th><th class="num">@L["credit"]</th><th class="num">@L["paid"]</th><th class="num">@L["balance"]</th><th class="no-print"></th></tr></thead>
+                    <tbody>
+                        @foreach (var e in _ledger)
+                        {
+                            <tr class="@(e.Refunded ? "refunded" : "")">
+                                <td>@e.At.ToString("dd-MM-yy")</td>
+                                <td class="strike">@(e.IsPayment ? "" : L["sale"] + " ")@e.Ref@(e.Refunded ? " (" + L["refunded"] + ")" : "")</td>
+                                <td class="num">@(e.Debt > 0 ? Fmt.Money(e.Debt) : "")</td>
+                                <td class="num">@(e.Payment > 0 ? Fmt.Money(e.Payment) : "")</td>
+                                <td class="num">@Fmt.Money(e.Balance)</td>
+                                <td class="no-print">@if (e.IsPayment && e.Payment > 0) { <button class="x" title="@L["delete_payment"]" @onclick="() => DeletePaymentAsync(e)">✕</button> }</td>
+                            </tr>
+                        }
+                        @if (_ledger.Count == 0) { <tr><td colspan="6" class="empty">@L["no_history"]</td></tr> }
+                    </tbody>
+                </table>
+                <hr />
+                <div class="r big"><b>@L["balance"]</b><b>@Fmt.Money(_ledger.LastOrDefault()?.Balance ?? 0)</b></div>
+            </div>
+        }
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _ledgerOpen = false">@L["close"]</button>
+        <button class="primary" @onclick="@(() => JS.InvokeVoidAsync("pos.print").AsTask())">@L["print"]</button>
+    </Actions>
+</Modal>
+
+@* ---------- reminder ---------- *@
+<Modal @bind-Open="_reminderOpen" Title="@("📤 " + L["reminder"])">
+    <ChildContent>
+        <p class="muted">@L["reminder_hint"]</p>
+        <textarea class="reminder-text" rows="12" @bind="_reminder"></textarea>
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _reminderOpen = false">@L["close"]</button>
+        <button @onclick="CopyReminderAsync">📋 @L["copy"]</button>
+        <button class="primary" @onclick="ShareReminderAsync">📤 @L["share"]</button>
+    </Actions>
+</Modal>
+
+@code {
+    List<DebtSummary> _debts = [];
+    decimal _collectedToday;
+    string _q = "", _filter = "all";
+    bool _showSettled, _busy;
+
+    bool _recvOpen, _slipOpen, _ledgerOpen;
+    DebtSummary? _recv; decimal? _recvAmount; string _recvMethod = "Cash", _recvNote = "";
+    (DateTime At, string Name, decimal Before, decimal Amount, string Method)? _slip;
+    Customer? _ledgerCustomer; List<LedgerEntry> _ledger = [];
+
+    IEnumerable<DebtSummary> Owing => _debts.Where(d => d.Balance > 0);
+    decimal Remaining => _recv is null ? 0 : Math.Max(0, _recv.Balance - (_recvAmount ?? 0));
+
+    IEnumerable<DebtSummary> Rows => _debts
+        .Where(d => _showSettled ? d.Customer.Active || d.Balance != 0 : d.Balance > 0)
+        .Where(d => _filter switch
+        {
+            "overdue" => d.IsOverdue,
+            "daily" => d.Customer.Term == CreditTerm.Daily,
+            "weekly" => d.Customer.Term == CreditTerm.Weekly,
+            "monthly" => d.Customer.Term == CreditTerm.Monthly,
+            _ => true,
+        })
+        .Where(d => _q.Length == 0 || d.Customer.Name.Contains(_q, StringComparison.OrdinalIgnoreCase) || d.Customer.Phone.Replace(" ", "").Contains(_q.Replace(" ", "")))
+        .OrderByDescending(d => d.OverdueDays).ThenByDescending(d => d.DueToday).ThenByDescending(d => d.Balance);
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _debts = await Pos.GetDebtsAsync();
+        _collectedToday = await Pos.GetCollectedAsync(DateTime.Today);
+    }
+
+    async Task OpenReceive(DebtSummary d)
+    {
+        _recv = d; _recvAmount = null; _recvMethod = "Cash"; _recvNote = "";
+        _recvOpen = true;
+        StateHasChanged();
+        await Task.Yield();
+        await JS.InvokeVoidAsync("pos.focus", "recvAmount");
+    }
+
+    async Task ReceiveAsync()
+    {
+        if (_recv is null || _busy) return;
+        var amount = _recvAmount ?? 0;
+        _busy = true;
+        try
+        {
+            if (await Pos.ReceivePaymentAsync(_recv.Customer.Id, amount, _recvMethod, _recvNote) is { } err) { Ui.ShowToast(err); return; }
+            _slip = (DateTime.Now, _recv.Customer.Name, _recv.Balance, PosMath.Money(amount), _recvMethod);
+            _recvOpen = false; _slipOpen = true;
+            await LoadAsync();
+            Ui.ShowToast(L.F("payment_recorded", Fmt.Money(amount), _recv.Customer.Name));
+        }
+        finally { _busy = false; }
+    }
+
+    async Task OpenLedgerAsync(Customer c)
+    {
+        _ledgerCustomer = c;
+        _ledger = await Pos.GetLedgerAsync(c.Id);
+        _ledgerOpen = true;
+    }
+
+    async Task DeletePaymentAsync(LedgerEntry e)
+    {
+        if (!await Auth.RequireOwnerAsync($"{L["delete_payment"]} — {_ledgerCustomer!.Name} {Fmt.Money(e.Payment)}")) return;
+        if (!await Ui.ConfirmAsync(L["delete_payment"], L.F("delete_payment_q", Fmt.Money(e.Payment), e.At.ToString("dd-MM-yyyy")))) return;
+        await Pos.DeletePaymentAsync(e.RefId, _ledgerCustomer!.Name);
+        _ledger = await Pos.GetLedgerAsync(_ledgerCustomer!.Id);
+        await LoadAsync();
+    }
+
+    // ---------- reminder message for Viber / Messenger / SMS ----------
+    bool _reminderOpen;
+    string _reminder = "";
+
+    async Task OpenReminderAsync(DebtSummary d)
+    {
+        var ledger = await Pos.GetLedgerAsync(d.Customer.Id);
+        _reminder = BuildReminder(d, ledger);
+        _reminderOpen = true;
+    }
+
+    /// Payments settle the oldest sales first, so the unpaid receipts are the newest ones.
+    string BuildReminder(DebtSummary d, List<LedgerEntry> ledger)
+    {
+        var paid = ledger.Sum(e => e.Payment) - ledger.Where(e => e.IsPayment).Sum(e => e.Debt); // minus refund pay-backs
+        var unpaid = new List<(DateTime At, string Ref, decimal Left)>();
+        foreach (var e in ledger.Where(e => !e.IsPayment && e.Debt > 0))
+        {
+            var covered = Math.Min(paid, e.Debt);
+            paid -= covered;
+            if (e.Debt - covered > 0) unpaid.Add((e.At, e.Ref, e.Debt - covered));
+        }
+
+        var s = Pos.Settings;
+        var lines = new List<string>
+        {
+            $"🏪 {s.Name}",
+            L.F("rem_greeting", d.Customer.Name),
+            L.F("rem_balance", DateTime.Today.ToString("dd-MM-yyyy"), Fmt.Money(d.Balance)),
+        };
+        if (d.OldestDue is { } due)
+            lines.Add(d.IsOverdue ? L.F("rem_overdue", due.ToString("dd-MM-yyyy"), d.OverdueDays) : L.F("rem_due", due.ToString("dd-MM-yyyy")));
+        if (unpaid.Count > 0)
+        {
+            lines.Add("");
+            lines.Add(L["rem_unpaid"]);
+            foreach (var u in unpaid.TakeLast(8)) lines.Add($"• {u.At:dd-MM} {u.Ref} — {Fmt.Money(u.Left)}");
+        }
+        if (s.PaymentInfo.Length > 0) { lines.Add(""); lines.Add(L.F("rem_pay_to", s.PaymentInfo)); }
+        lines.Add("");
+        lines.Add(L["rem_thanks"] + (s.Phone.Length > 0 ? " ☎ " + s.Phone : ""));
+        return string.Join("\n", lines);
+    }
+
+    async Task CopyReminderAsync()
+    {
+        await MainThread.InvokeOnMainThreadAsync(() => Clipboard.Default.SetTextAsync(_reminder));
+        Ui.ShowToast(L["copied"]);
+    }
+
+    async Task ShareReminderAsync()
+    {
+        await Files.ShareTextAsync(_reminder, L["reminder"]);
+    }
+}

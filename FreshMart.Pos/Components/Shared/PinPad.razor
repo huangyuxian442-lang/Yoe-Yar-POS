@@ -1,0 +1,46 @@
+@inject IJSRuntime JS
+
+<div class="pinpad">
+    <input id="@Id" class="pin-input" type="password" inputmode="numeric" maxlength="8" autocomplete="off"
+           @bind="_pin" @bind:event="oninput" @onkeydown="OnKey" />
+    <div class="keys">
+        @foreach (var k in new[] { "1", "2", "3", "4", "5", "6", "7", "8", "9", "⌫", "0", "OK" })
+        {
+            <button class="@(k == "OK" ? "primary" : "")" @onclick="() => PressAsync(k)">@k</button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Id { get; set; } = "pin";
+    [Parameter] public EventCallback<string> OnSubmit { get; set; }
+
+    string _pin = "";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await JS.InvokeVoidAsync("pos.focus", Id);
+    }
+
+    public void Clear() { _pin = ""; StateHasChanged(); }
+
+    async Task OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await SubmitAsync();
+    }
+
+    async Task PressAsync(string k)
+    {
+        if (k == "OK") { await SubmitAsync(); return; }
+        if (k == "⌫") { if (_pin.Length > 0) _pin = _pin[..^1]; }
+        else if (_pin.Length < 8) _pin += k;
+        await JS.InvokeVoidAsync("pos.focus", Id);
+    }
+
+    async Task SubmitAsync()
+    {
+        var pin = _pin;
+        _pin = "";
+        await OnSubmit.InvokeAsync(pin);
+    }
+}

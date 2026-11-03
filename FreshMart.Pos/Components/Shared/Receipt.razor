@@ -1,0 +1,58 @@
+@inject PosService Pos
+@inject Loc L
+
+<div id="receipt">
+    <div class="c"><b>@Pos.Settings.Name</b><br />@Pos.Settings.Address@if (Pos.Settings.Phone.Length > 0) { <br />@Pos.Settings.Phone }</div>
+    <hr />
+    <div class="r"><span>@L["receipt_no"] #@Sale.ReceiptNo</span><span>@Sale.CreatedAt.ToString("dd-MM-yyyy HH:mm")</span></div>
+    @if (Sale.CustomerName.Length > 0)
+    {
+        <div class="r"><span>@L["customer"]</span><span>@Sale.CustomerName</span></div>
+    }
+    <hr />
+    @foreach (var l in Lines)
+    {
+        <div>@L.Name(l) @if (l.Pack == PackType.Ctn) { <b>[@L["ctn"] ×@l.UnitsPerPack]</b> }</div>
+        <div class="r"><span>&nbsp; @QtyText(l) × @Fmt.Money(l.Price)</span><span>@Fmt.Money(l.Amount)</span></div>
+    }
+    <hr />
+    <div class="r"><span>@L["subtotal"]</span><span>@Fmt.Money(Sale.Subtotal)</span></div>
+    @if (Sale.Discount > 0)
+    {
+        <div class="r"><span>@L["discount"] @Fmt.Num(Sale.DiscountPct)%</span><span>-@Fmt.Money(Sale.Discount)</span></div>
+    }
+    @if (Sale.TaxRate > 0)
+    {
+        <div class="r"><span>@L["tax"] @Fmt.Num(Sale.TaxRate)%</span><span>@Fmt.Money(Sale.Tax)</span></div>
+    }
+    <div class="r big"><b>@L["total"]</b><b>@Fmt.Money(Sale.Total)</b></div>
+    @if (Sale.Method == "Cash")
+    {
+        <div class="r"><span>@L["method_cash"]</span><span>@Fmt.Money(Sale.Tendered)</span></div>
+        @if (Sale.Change > 0) { <div class="r"><span>@L["change"]</span><span>@Fmt.Money(Sale.Change)</span></div> }
+    }
+    else if (Sale.Paid > 0)
+    {
+        <div class="r"><span>@L.Method(Sale.Method)</span><span>@Fmt.Money(Sale.Paid)</span></div>
+    }
+    @if (Sale.Credit > 0)
+    {
+        <div class="r"><b>@L["credit_this_sale"]</b><b>@Fmt.Money(Sale.Credit)</b></div>
+        <div class="r"><span>@L["prev_balance"]</span><span>@Fmt.Money(Sale.BalanceAfter - Sale.Credit)</span></div>
+        <div class="r"><b>@L["total_balance"]</b><b>@Fmt.Money(Sale.BalanceAfter)</b></div>
+        @if (Sale.DueDate is { } due) { <div class="r"><span>@L["due_date"]</span><span>@due.ToString("dd-MM-yyyy")</span></div> }
+    }
+    @if (Sale.Refunded)
+    {
+        <hr /><div class="c"><b>*** @L["refunded"] ***</b></div>
+    }
+    <hr />
+    <div class="c">@Pos.Settings.Footer</div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public Sale Sale { get; set; } = default!;
+    [Parameter, EditorRequired] public List<SaleLine> Lines { get; set; } = [];
+
+    string QtyText(SaleLine l) => l.Unit == SellUnit.Kg ? Fmt.Qty(l.Qty, l.Unit) : $"{Fmt.Num(l.Qty)} {L.Pack(l.Pack)}";
+}

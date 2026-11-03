@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreshMart POS</title>
+<style>
+  :root {
+    --bg: #f4f6f5; --panel: #ffffff; --ink: #1d2623; --muted: #6b7a74;
+    --line: #dfe5e2; --accent: #1f8a5b; --accent-ink: #ffffff; --accent-soft: #e3f3eb;
+    --warn: #b7791f; --warn-soft: #fdf3e1; --danger: #c0392b; --danger-soft: #fbe9e7;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+  button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 8px; padding: 8px 12px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.danger { color: var(--danger); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input, select { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); width: 100%; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 17px; margin: 0; color: var(--accent); }
+  nav { display: flex; gap: 4px; }
+  nav button { border: none; background: none; padding: 8px 14px; color: var(--muted); }
+  nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  header .clock { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  main { height: calc(100% - 57px); }
+  .view { display: none; height: 100%; }
+  .view.active { display: flex; }
+
+  /* Checkout */
+  #checkout { gap: 12px; padding: 12px; }
+  .catalog { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: 10px; }
+  .searchbar { display: flex; gap: 8px; }
+  .searchbar input { font-size: 16px; padding: 12px; }
+  .cats { display: flex; gap: 6px; flex-wrap: wrap; }
+  .cats button { padding: 6px 12px; border-radius: 999px; }
+  .cats button.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .grid { flex: 1; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; align-content: start; }
+  .tile { text-align: left; padding: 10px; display: flex; flex-direction: column; gap: 4px; min-height: 88px; }
+  .tile .name { font-weight: 600; }
+  .tile .price { color: var(--accent); font-weight: 600; }
+  .tile .stock { font-size: 12px; color: var(--muted); }
+  .tile.low .stock { color: var(--warn); }
+  .tile.out { opacity: .5; }
+
+  .cart { width: 400px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; }
+  .cart-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .cart-head h2 { font-size: 15px; margin: 0; }
+  .cart-lines { flex: 1; overflow: auto; }
+  .line { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+  .line .meta { font-size: 12px; color: var(--muted); }
+  .qty { display: flex; align-items: center; gap: 4px; }
+  .qty button { padding: 2px 8px; }
+  .qty span { min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
+  .line .x { border: none; color: var(--muted); padding: 4px 6px; }
+  .empty { padding: 40px 14px; text-align: center; color: var(--muted); }
+  .totals { padding: 12px 14px; border-top: 1px solid var(--line); }
+  .totals .row { display: flex; justify-content: space-between; padding: 2px 0; }
+  .totals .grand { font-size: 22px; font-weight: 700; padding-top: 6px; }
+  .totals .disc { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .totals .disc input { width: 80px; padding: 4px 8px; }
+  .cart-actions { display: grid; grid-template-columns: 1fr 1fr 2fr; gap: 8px; padding: 0 14px 14px; }
+  .cart-actions .pay { font-size: 17px; padding: 14px; }
+
+  /* Tables / pages */
+  .page { flex-direction: column; padding: 16px; gap: 12px; overflow: auto; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .toolbar input { max-width: 280px; }
+  .toolbar .spacer { flex: 1; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  th, td { padding: 8px 12px; border-bottom: 1px solid var(--line); text-align: left; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: #fafbfa; }
+  tr.low td { background: var(--warn-soft); }
+  tr.refunded td { color: var(--muted); text-decoration: line-through; }
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .badge.danger { background: var(--danger-soft); color: var(--danger); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .card .k { font-size: 12px; color: var(--muted); }
+  .card .v { font-size: 24px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  h3 { margin: 8px 0 0; font-size: 14px; }
+  .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; max-width: 640px; }
+
+  /* Modal */
+  .modal-bg { position: fixed; inset: 0; background: rgba(20, 30, 25, .45); display: none; align-items: center; justify-content: center; z-index: 10; }
+  .modal-bg.open { display: flex; }
+  .modal { background: var(--panel); border-radius: 14px; padding: 20px; width: min(460px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto; }
+  .modal h2 { margin: 0 0 14px; font-size: 18px; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+  .methods { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+  .methods button.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .quick { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .due { font-size: 28px; font-weight: 700; text-align: center; margin-bottom: 12px; }
+  .change { font-size: 20px; text-align: center; margin-top: 12px; }
+  .stack > * + * { margin-top: 10px; }
+
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 10px 16px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 20; }
+  .toast.show { opacity: 1; }
+
+  /* Receipt */
+  #receipt { font: 12px/1.35 "Courier New", monospace; width: 280px; margin: 0 auto; background: #fff; color: #000; padding: 12px; border: 1px dashed #bbb; }
+  #receipt .c { text-align: center; }
+  #receipt .r { display: flex; justify-content: space-between; gap: 8px; }
+  #receipt hr { border: none; border-top: 1px dashed #000; }
+  @media print {
+    body * { visibility: hidden; }
+    #receipt, #receipt * { visibility: visible; }
+    #receipt { position: absolute; left: 0; top: 0; border: none; width: 72mm; }
+  }
+
+  @media (max-width: 860px) {
+    #checkout { flex-direction: column; }
+    .cart { width: 100%; min-height: 420px; }
+    .two, .form-grid { grid-template-columns: 1fr; }
+    header { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="storeTitle">FreshMart POS</h1>
+  <nav>
+    <button data-view="checkout" class="active">Checkout</button>
+    <button data-view="inventory">Inventory</button>
+    <button data-view="sales">Sales</button>
+    <button data-view="settings">Settings</button>
+  </nav>
+  <span class="clock" id="clock"></span>
+</header>
+
+<main>
+  <!-- CHECKOUT -->
+  <section class="view active" id="checkout">
+    <div class="catalog">
+      <div class="searchbar">
+        <input id="search" placeholder="Scan barcode or search product…  (F2)" autocomplete="off" autofocus>
+      </div>
+      <div class="cats" id="cats"></div>
+      <div class="grid" id="grid"></div>
+    </div>
+    <aside class="cart">
+      <div class="cart-head">
+        <h2>Current sale <span id="heldBadge"></span></h2>
+        <button id="resumeBtn" style="display:none">Resume held</button>
+      </div>
+      <div class="cart-lines" id="cartLines"></div>
+      <div class="totals">
+        <div class="row"><span>Subtotal</span><span class="num" id="tSub"></span></div>
+        <div class="disc"><span>Discount</span><input id="discPct" type="number" min="0" max="100" step="1" value="0"> %<span class="num" id="tDisc" style="margin-left:auto"></span></div>
+        <div class="row"><span id="taxLabel">Tax</span><span class="num" id="tTax"></span></div>
+        <div class="row grand"><span>Total</span><span class="num" id="tTotal"></span></div>
+      </div>
+      <div class="cart-actions">
+        <button class="danger" id="clearBtn">Clear</button>
+        <button id="holdBtn">Hold</button>
+        <button class="primary pay" id="payBtn">Pay (F9)</button>
+      </div>
+    </aside>
+  </section>
+
+  <!-- INVENTORY -->
+  <section class="view page" id="inventory">
+    <div class="toolbar">
+      <input id="invSearch" placeholder="Filter products…">
+      <label style="margin:0;display:flex;gap:6px;align-items:center;color:var(--ink)"><input type="checkbox" id="lowOnly" style="width:auto"> Low stock only</label>
+      <span class="spacer"></span>
+      <button id="exportInv">Export CSV</button>
+      <button class="primary" id="addProduct">+ Add product</button>
+    </div>
+    <table>
+      <thead><tr><th>Barcode</th><th>Name</th><th>Category</th><th class="num">Price</th><th>Unit</th><th class="num">Stock</th><th class="num">Reorder at</th><th></th></tr></thead>
+      <tbody id="invBody"></tbody>
+    </table>
+  </section>
+
+  <!-- SALES -->
+  <section class="view page" id="sales">
+    <div class="toolbar">
+      <label style="margin:0">Date</label>
+      <input type="date" id="salesDate" style="max-width:180px">
+      <span class="spacer"></span>
+      <button id="exportSales">Export CSV</button>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="k">Revenue</div><div class="v" id="kRev"></div></div>
+      <div class="card"><div class="k">Transactions</div><div class="v" id="kTx"></div></div>
+      <div class="card"><div class="k">Average basket</div><div class="v" id="kAvg"></div></div>
+      <div class="card"><div class="k">Tax collected</div><div class="v" id="kTax"></div></div>
+    </div>
+    <div class="two">
+      <div><h3>Top sellers</h3><table><thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Revenue</th></tr></thead><tbody id="topBody"></tbody></table></div>
+      <div><h3>Payment mix</h3><table><thead><tr><th>Method</th><th class="num">Count</th><th class="num">Amount</th></tr></thead><tbody id="mixBody"></tbody></table></div>
+    </div>
+    <h3>Transactions</h3>
+    <table><thead><tr><th>Receipt #</th><th>Time</th><th class="num">Items</th><th>Method</th><th class="num">Total</th><th></th></tr></thead><tbody id="salesBody"></tbody></table>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="view page" id="settings">
+    <div class="form-grid">
+      <div><label>Store name</label><input id="sName"></div>
+      <div><label>Currency symbol</label><input id="sCur"></div>
+      <div style="grid-column:1/-1"><label>Address / receipt header</label><input id="sAddr"></div>
+      <div><label>Tax rate (%)</label><input id="sTax" type="number" min="0" step="0.01"></div>
+      <div><label>Receipt footer</label><input id="sFoot"></div>
+    </div>
+    <div class="toolbar"><button class="primary" id="saveSettings">Save settings</button></div>
+    <h3>Data</h3>
+    <p style="color:var(--muted);margin:0">All data is stored in this browser. Download a backup every day and keep it on a USB drive.</p>
+    <div class="toolbar">
+      <button id="backupBtn">Download backup (JSON)</button>
+      <button id="restoreBtn">Restore from backup…</button>
+      <input type="file" id="restoreFile" accept="application/json" style="display:none">
+      <button class="danger" id="resetBtn">Reset to demo data</button>
+    </div>
+  </section>
+</main>
+
+<!-- Payment modal -->
+<div class="modal-bg" id="payModal">
+  <div class="modal">
+    <h2>Payment</h2>
+    <div class="due" id="payDue"></div>
+    <div class="methods">
+      <button data-m="Cash" class="active">Cash</button>
+      <button data-m="Card">Card</button>
+      <button data-m="Mobile">Mobile</button>
+    </div>
+    <div id="cashBox">
+      <label>Amount tendered</label>
+      <input id="tendered" type="number" min="0" step="0.01" style="font-size:20px">
+      <div class="quick" id="quick"></div>
+      <div class="change" id="changeOut"></div>
+    </div>
+    <div class="actions">
+      <button data-close>Cancel</button>
+      <button class="primary" id="completeBtn">Complete sale</button>
+    </div>
+  </div>
+</div>
+
+<!-- Weight modal -->
+<div class="modal-bg" id="weightModal">
+  <div class="modal">
+    <h2 id="wTitle"></h2>
+    <label>Weight (kg)</label>
+    <input id="wInput" type="number" min="0.001" step="0.001" style="font-size:20px">
+    <div class="change" id="wPreview"></div>
+    <div class="actions"><button data-close>Cancel</button><button class="primary" id="wOk">Add to sale</button></div>
+  </div>
+</div>
+
+<!-- Product modal -->
+<div class="modal-bg" id="productModal">
+  <div class="modal">
+    <h2 id="pTitle">Product</h2>
+    <div class="form-grid" style="grid-template-columns:1fr 1fr">
+      <div style="grid-column:1/-1"><label>Name *</label><input id="pName"></div>
+      <div><label>Barcode / SKU *</label><input id="pCode"></div>
+      <div><label>Category</label><input id="pCat" list="catList"><datalist id="catList"></datalist></div>
+      <div><label>Price *</label><input id="pPrice" type="number" min="0" step="0.01"></div>
+      <div><label>Sold by</label><select id="pUnit"><option value="ea">Each</option><option value="kg">Weight (kg)</option></select></div>
+      <div><label>Stock</label><input id="pStock" type="number" step="0.001"></div>
+      <div><label>Reorder at</label><input id="pReorder" type="number" min="0" step="1"></div>
+    </div>
+    <div class="actions"><button data-close>Cancel</button><button class="primary" id="pSave">Save</button></div>
+  </div>
+</div>
+
+<!-- Receipt modal -->
+<div class="modal-bg" id="receiptModal">
+  <div class="modal">
+    <div id="receipt"></div>
+    <div class="actions"><button data-close>Close</button><button class="primary" id="printBtn">Print</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  // ---------- Storage ----------
+  const KEY = 'freshmart-pos-v1';
+  const DEMO_PRODUCTS = [
+    ['4006381333931', 'Whole Milk 1L', 'Dairy', 1.89, 'ea', 40, 10],
+    ['4006381333932', 'Free-range Eggs (12)', 'Dairy', 3.49, 'ea', 25, 8],
+    ['4006381333933', 'Cheddar Cheese 200g', 'Dairy', 2.99, 'ea', 18, 6],
+    ['4006381333934', 'Greek Yogurt 500g', 'Dairy', 2.49, 'ea', 4, 6],
+    ['2000001', 'Bananas', 'Produce', 1.29, 'kg', 30, 8],
+    ['2000002', 'Red Apples', 'Produce', 2.59, 'kg', 22, 8],
+    ['2000003', 'Tomatoes', 'Produce', 2.99, 'kg', 15, 5],
+    ['2000004', 'Potatoes', 'Produce', 0.99, 'kg', 60, 15],
+    ['5000112548167', 'Sourdough Loaf', 'Bakery', 3.25, 'ea', 12, 4],
+    ['5000112548168', 'Croissant', 'Bakery', 0.95, 'ea', 30, 10],
+    ['8901030865278', 'Jasmine Rice 5kg', 'Pantry', 8.99, 'ea', 14, 4],
+    ['8901030865279', 'Pasta 500g', 'Pantry', 1.19, 'ea', 50, 12],
+    ['8901030865280', 'Olive Oil 500ml', 'Pantry', 5.49, 'ea', 9, 4],
+    ['8901030865281', 'Canned Tuna', 'Pantry', 1.79, 'ea', 3, 10],
+    ['5449000000996', 'Cola 1.5L', 'Beverages', 1.99, 'ea', 36, 12],
+    ['5449000000997', 'Mineral Water 1.5L', 'Beverages', 0.79, 'ea', 80, 24],
+    ['5449000000998', 'Orange Juice 1L', 'Beverages', 2.79, 'ea', 20, 6],
+    ['7622210449283', 'Dark Chocolate Bar', 'Snacks', 1.59, 'ea', 45, 10],
+    ['7622210449284', 'Potato Chips 150g', 'Snacks', 1.99, 'ea', 28, 8],
+    ['3017620422003', 'Dish Soap 500ml', 'Household', 1.89, 'ea', 16, 5],
+    ['3017620422004', 'Toilet Paper 9 rolls', 'Household', 4.99, 'ea', 0, 5],
+  ];
+
+  function demoState() {
+    return {
+      settings: { name: 'FreshMart', addr: '12 Market Street', currency: '$', tax: 5, footer: 'Thank you for shopping local!' },
+      products: DEMO_PRODUCTS.map(([code, name, cat, price, unit, stock, reorder], i) =>
+        ({ id: 'p' + (i + 1), code, name, cat, price, unit, stock, reorder })),
+      sales: [],
+      nextReceipt: 1001,
+      held: null,
+    };
+  }
+
+  let state;
+  try { state = JSON.parse(localStorage.getItem(KEY)) || demoState(); } catch { state = demoState(); }
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch { toast('Could not save — storage unavailable'); } };
+
+  // ---------- Helpers ----------
+  const $ = s => document.querySelector(s);
+  const $$ = s => [...document.querySelectorAll(s)];
+  const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
+  const money = n => state.settings.currency + r2(n).toFixed(2);
+  const qtyFmt = (q, unit) => unit === 'kg' ? q.toFixed(3) + ' kg' : String(q);
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const today = () => new Date().toLocaleDateString('en-CA');
+  const byId = id => state.products.find(p => p.id === id);
+
+  function toast(msg) {
+    const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 1800);
+  }
+  function openModal(id) { $(id).classList.add('open'); }
+  function closeModals() { $$('.modal-bg').forEach(m => m.classList.remove('open')); $('#search').focus(); }
+  $$('[data-close]').forEach(b => b.onclick = closeModals);
+  $$('.modal-bg').forEach(m => m.addEventListener('click', e => { if (e.target === m) closeModals(); }));
+
+  function download(name, text, type) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([text], { type }));
+    a.download = name; a.click(); URL.revokeObjectURL(a.href);
+  }
+  const csv = rows => rows.map(r => r.map(v => /[",\n]/.test(String(v)) ? '"' + String(v).replace(/"/g, '""') + '"' : v).join(',')).join('\n');
+
+  // ---------- Navigation ----------
+  $$('nav button').forEach(b => b.onclick = () => showView(b.dataset.view));
+  function showView(v) {
+    $$('nav button').forEach(b => b.classList.toggle('active', b.dataset.view === v));
+    $$('.view').forEach(s => s.classList.toggle('active', s.id === v));
+    ({ checkout: renderCheckout, inventory: renderInventory, sales: renderSales, settings: renderSettings })[v]();
+  }
+  setInterval(() => $('#clock').textContent = new Date().toLocaleString(), 1000);
+
+  // ---------- Checkout ----------
+  let cart = [];       // { id, qty }
+  let activeCat = 'All';
+
+  function totals() {
+    const sub = r2(cart.reduce((s, l) => s + byId(l.id).price * l.qty, 0));
+    const pct = Math.min(100, Math.max(0, Number($('#discPct').value) || 0));
+    const disc = r2(sub * pct / 100);
+    const tax = r2((sub - disc) * state.settings.tax / 100);
+    return { sub, pct, disc, tax, total: r2(sub - disc + tax) };
+  }
+
+  function renderCheckout() {
+    $('#storeTitle').textContent = state.settings.name + ' POS';
+    const cats = ['All', ...new Set(state.products.map(p => p.cat).filter(Boolean))];
+    $('#cats').innerHTML = cats.map(c => `<button class="${c === activeCat ? 'active' : ''}" data-c="${esc(c)}">${esc(c)}</button>`).join('');
+    $$('#cats button').forEach(b => b.onclick = () => { activeCat = b.dataset.c; renderCheckout(); });
+
+    const q = $('#search').value.trim().toLowerCase();
+    const list = state.products.filter(p =>
+      (activeCat === 'All' || p.cat === activeCat) &&
+      (!q || p.name.toLowerCase().includes(q) || p.code.includes(q)));
+    $('#grid').innerHTML = list.map(p => {
+      const cls = p.stock <= 0 ? 'out' : p.stock <= p.reorder ? 'low' : '';
+      return `<button class="tile ${cls}" data-id="${p.id}">
+        <span class="name">${esc(p.name)}</span>
+        <span class="price">${money(p.price)}${p.unit === 'kg' ? ' / kg' : ''}</span>
+        <span class="stock">${p.stock <= 0 ? 'Out of stock' : 'Stock: ' + qtyFmt(p.stock, p.unit)}</span>
+      </button>`;
+    }).join('') || '<div class="empty">No products found</div>';
+    $$('#grid .tile').forEach(t => t.onclick = () => addToCart(t.dataset.id));
+    renderCart();
+  }
+
+  function renderCart() {
+    $('#cartLines').innerHTML = cart.length ? cart.map((l, i) => {
+      const p = byId(l.id);
+      return `<div class="line">
+        <div><div>${esc(p.name)}</div><div class="meta">${money(p.price)}${p.unit === 'kg' ? '/kg' : ' ea'}</div></div>
+        <div class="qty">
+          ${p.unit === 'kg'
+            ? `<button data-w="${i}">${l.qty.toFixed(3)} kg</button>`
+            : `<button data-d="${i}">−</button><span>${l.qty}</span><button data-i="${i}">+</button>`}
+        </div>
+        <div style="display:flex;align-items:center;gap:4px"><span class="num" style="min-width:64px">${money(p.price * l.qty)}</span><button class="x" data-x="${i}" title="Remove">✕</button></div>
+      </div>`;
+    }).join('') : '<div class="empty">Scan or tap a product to start a sale</div>';
+
+    $$('[data-i]').forEach(b => b.onclick = () => changeQty(+b.dataset.i, 1));
+    $$('[data-d]').forEach(b => b.onclick = () => changeQty(+b.dataset.d, -1));
+    $$('[data-x]').forEach(b => b.onclick = () => { cart.splice(+b.dataset.x, 1); renderCart(); });
+    $$('[data-w]').forEach(b => b.onclick = () => askWeight(cart[+b.dataset.w].id, +b.dataset.w));
+
+    const t = totals();
+    $('#tSub').textContent = money(t.sub);
+    $('#tDisc').textContent = t.disc ? '−' + money(t.disc) : money(0);
+    $('#taxLabel').textContent = `Tax (${state.settings.tax}%)`;
+    $('#tTax').textContent = money(t.tax);
+    $('#tTotal').textContent = money(t.total);
+    $('#payBtn').disabled = !cart.length;
+    $('#resumeBtn').style.display = state.held ? '' : 'none';
+    $('#heldBadge').innerHTML = state.held ? '<span class="badge warn">1 on hold</span>' : '';
+  }
+
+  function inCart(id) { return cart.filter(l => l.id === id).reduce((s, l) => s + l.qty, 0); }
+
+  function addToCart(id) {
+    const p = byId(id);
+    if (!p) return;
+    if (p.unit === 'kg') return askWeight(id);
+    if (inCart(id) + 1 > p.stock) return toast(`Only ${p.stock} × ${p.name} in stock`);
+    const line = cart.find(l => l.id === id);
+    line ? line.qty++ : cart.push({ id, qty: 1 });
+    renderCart();
+  }
+
+  function changeQty(i, d) {
+    const l = cart[i], p = byId(l.id);
+    if (d > 0 && inCart(l.id) + d > p.stock) return toast(`Only ${p.stock} × ${p.name} in stock`);
+    l.qty += d;
+    if (l.qty <= 0) cart.splice(i, 1);
+    renderCart();
+  }
+
+  let weightCtx = null;
+  function askWeight(id, lineIdx) {
+    const p = byId(id);
+    weightCtx = { id, lineIdx };
+    $('#wTitle').textContent = `${p.name} — ${money(p.price)}/kg`;
+    $('#wInput').value = lineIdx != null ? cart[lineIdx].qty : '';
+    $('#wPreview').textContent = '';
+    openModal('#weightModal');
+    setTimeout(() => $('#wInput').focus(), 0);
+    $('#wInput').oninput();
+  }
+  $('#wInput').oninput = () => {
+    if (!weightCtx) return;
+    const kg = Number($('#wInput').value) || 0;
+    $('#wPreview').textContent = kg ? money(byId(weightCtx.id).price * kg) : '';
+  };
+  function confirmWeight() {
+    const kg = Math.round((Number($('#wInput').value) || 0) * 1000) / 1000;
+    const { id, lineIdx } = weightCtx, p = byId(id);
+    if (kg <= 0) return toast('Enter a weight');
+    const other = inCart(id) - (lineIdx != null ? cart[lineIdx].qty : 0);
+    if (other + kg > p.stock + 1e-9) return toast(`Only ${p.stock.toFixed(3)} kg in stock`);
+    lineIdx != null ? cart[lineIdx].qty = kg : cart.push({ id, qty: kg });
+    closeModals(); renderCart();
+  }
+  $('#wOk').onclick = confirmWeight;
+  $('#wInput').onkeydown = e => { if (e.key === 'Enter') confirmWeight(); };
+
+  // Search + barcode scanner (scanners type the code then press Enter)
+  $('#search').oninput = renderCheckout;
+  $('#search').onkeydown = e => {
+    if (e.key !== 'Enter') return;
+    const q = $('#search').value.trim();
+    if (!q) return;
+    const exact = state.products.find(p => p.code === q);
+    const first = exact || state.products.find(p => p.name.toLowerCase().includes(q.toLowerCase()));
+    if (first) addToCart(first.id); else toast('No product matches "' + q + '"');
+    $('#search').value = '';
+    renderCheckout();
+  };
+  $('#discPct').oninput = renderCart;
+
+  $('#clearBtn').onclick = () => { if (cart.length && confirm('Clear the current sale?')) { cart = []; $('#discPct').value = 0; renderCart(); } };
+  $('#holdBtn').onclick = () => {
+    if (!cart.length) return toast('Nothing to hold');
+    if (state.held) return toast('A sale is already on hold — resume it first');
+    state.held = { cart, disc: $('#discPct').value }; save();
+    cart = []; $('#discPct').value = 0; renderCart(); toast('Sale put on hold');
+  };
+  $('#resumeBtn').onclick = () => {
+    if (cart.length) return toast('Finish or clear the current sale first');
+    cart = state.held.cart.filter(l => byId(l.id)); $('#discPct').value = state.held.disc;
+    state.held = null; save(); renderCart();
+  };
+
+  // ---------- Payment ----------
+  let method = 'Cash';
+  $$('.methods button').forEach(b => b.onclick = () => setMethod(b.dataset.m));
+  function setMethod(m) {
+    method = m;
+    $$('.methods button').forEach(b => b.classList.toggle('active', b.dataset.m === m));
+    $('#cashBox').style.display = m === 'Cash' ? '' : 'none';
+    updateChange();
+  }
+  function updateChange() {
+    const { total } = totals();
+    const tendered = Number($('#tendered').value) || 0;
+    const ok = method !== 'Cash' || tendered + 1e-9 >= total;
+    $('#changeOut').innerHTML = method === 'Cash' && tendered
+      ? (ok ? `Change: <b>${money(tendered - total)}</b>` : `<span style="color:var(--danger)">Short by ${money(total - tendered)}</span>`)
+      : '';
+    $('#completeBtn').disabled = !ok;
+  }
+  $('#tendered').oninput = updateChange;
+  $('#tendered').onkeydown = e => { if (e.key === 'Enter' && !$('#completeBtn').disabled) completeSale(); };
+
+  function openPay() {
+    if (!cart.length) return;
+    const { total } = totals();
+    $('#payDue').textContent = money(total);
+    $('#tendered').value = '';
+    const quick = [...new Set([total, Math.ceil(total), Math.ceil(total / 5) * 5, Math.ceil(total / 10) * 10, Math.ceil(total / 20) * 20, 50, 100])]
+      .filter(v => v >= total).sort((a, b) => a - b).slice(0, 5);
+    $('#quick').innerHTML = quick.map(v => `<button data-q="${v}">${v === total ? 'Exact' : money(v)}</button>`).join('');
+    $$('[data-q]').forEach(b => b.onclick = () => { $('#tendered').value = r2(+b.dataset.q).toFixed(2); updateChange(); });
+    setMethod('Cash');
+    openModal('#payModal');
+    setTimeout(() => $('#tendered').focus(), 0);
+  }
+  $('#payBtn').onclick = openPay;
+
+  function completeSale() {
+    const t = totals();
+    const tendered = method === 'Cash' ? r2(Number($('#tendered').value) || 0) : t.total;
+    if (tendered + 1e-9 < t.total) return;
+    const sale = {
+      no: state.nextReceipt++,
+      at: new Date().toISOString(),
+      date: today(),
+      lines: cart.map(l => { const p = byId(l.id); return { id: p.id, name: p.name, unit: p.unit, price: p.price, qty: l.qty, amount: r2(p.price * l.qty) }; }),
+      ...t, taxRate: state.settings.tax, method, tendered, change: r2(tendered - t.total), refunded: false,
+    };
+    sale.lines.forEach(l => { const p = byId(l.id); p.stock = Math.round((p.stock - l.qty) * 1000) / 1000; });
+    state.sales.push(sale); save();
+    cart = []; $('#discPct').value = 0;
+    closeModals(); renderCheckout();
+    showReceipt(sale);
+  }
+  $('#completeBtn').onclick = completeSale;
+
+  function showReceipt(s) {
+    const st = state.settings;
+    $('#receipt').innerHTML = `
+      <div class="c"><b>${esc(st.name)}</b><br>${esc(st.addr)}</div><hr>
+      <div class="r"><span>Receipt #${s.no}</span><span>${new Date(s.at).toLocaleString()}</span></div><hr>
+      ${s.lines.map(l => `<div>${esc(l.name)}</div><div class="r"><span>&nbsp; ${l.unit === 'kg' ? l.qty.toFixed(3) + 'kg' : l.qty} × ${money(l.price)}</span><span>${money(l.amount)}</span></div>`).join('')}
+      <hr>
+      <div class="r"><span>Subtotal</span><span>${money(s.sub)}</span></div>
+      ${s.disc ? `<div class="r"><span>Discount ${s.pct}%</span><span>-${money(s.disc)}</span></div>` : ''}
+      <div class="r"><span>Tax ${s.taxRate}%</span><span>${money(s.tax)}</span></div>
+      <div class="r"><b>TOTAL</b><b>${money(s.total)}</b></div>
+      <div class="r"><span>${s.method}</span><span>${money(s.tendered)}</span></div>
+      ${s.method === 'Cash' ? `<div class="r"><span>Change</span><span>${money(s.change)}</span></div>` : ''}
+      ${s.refunded ? '<hr><div class="c"><b>*** REFUNDED ***</b></div>' : ''}
+      <hr><div class="c">${esc(st.footer)}</div>`;
+    openModal('#receiptModal');
+  }
+  $('#printBtn').onclick = () => window.print();
+
+  // ---------- Inventory ----------
+  function renderInventory() {
+    const q = $('#invSearch').value.trim().toLowerCase();
+    const lowOnly = $('#lowOnly').checked;
+    const rows = state.products.filter(p =>
+      (!q || [p.name, p.code, p.cat].some(v => String(v).toLowerCase().includes(q))) &&
+      (!lowOnly || p.stock <= p.reorder));
+    $('#invBody').innerHTML = rows.map(p => {
+      const low = p.stock <= p.reorder;
+      const badge = p.stock <= 0 ? '<span class="badge danger">Out</span>' : low ? '<span class="badge warn">Reorder</span>' : '';
+      return `<tr class="${low ? 'low' : ''}">
+        <td>${esc(p.code)}</td><td>${esc(p.name)}</td><td>${esc(p.cat)}</td>
+        <td class="num">${money(p.price)}</td><td>${p.unit === 'kg' ? 'kg' : 'each'}</td>
+        <td class="num">${qtyFmt(p.stock, p.unit)} ${badge}</td><td class="num">${p.reorder}</td>
+        <td style="white-space:nowrap"><button data-e="${p.id}">Edit</button> <button class="danger" data-del="${p.id}">Delete</button></td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="8" class="empty">No products</td></tr>';
+    $$('[data-e]').forEach(b => b.onclick = () => editProduct(b.dataset.e));
+    $$('[data-del]').forEach(b => b.onclick = () => {
+      const p = byId(b.dataset.del);
+      if (!confirm(`Delete "${p.name}"?`)) return;
+      state.products = state.products.filter(x => x.id !== p.id);
+      cart = cart.filter(l => l.id !== p.id);
+      save(); renderInventory();
+    });
+  }
+  $('#invSearch').oninput = renderInventory;
+  $('#lowOnly').onchange = renderInventory;
+
+  let editingId = null;
+  function editProduct(id) {
+    editingId = id;
+    const p = id ? byId(id) : { name: '', code: '', cat: '', price: '', unit: 'ea', stock: 0, reorder: 5 };
+    $('#pTitle').textContent = id ? 'Edit product' : 'Add product';
+    $('#pName').value = p.name; $('#pCode').value = p.code; $('#pCat').value = p.cat;
+    $('#pPrice').value = p.price; $('#pUnit').value = p.unit; $('#pStock').value = p.stock; $('#pReorder').value = p.reorder;
+    $('#catList').innerHTML = [...new Set(state.products.map(x => x.cat))].map(c => `<option value="${esc(c)}">`).join('');
+    openModal('#productModal');
+    setTimeout(() => $('#pName').focus(), 0);
+  }
+  $('#addProduct').onclick = () => editProduct(null);
+  $('#pSave').onclick = () => {
+    const d = {
+      name: $('#pName').value.trim(), code: $('#pCode').value.trim(), cat: $('#pCat').value.trim() || 'Other',
+      price: r2(Number($('#pPrice').value)), unit: $('#pUnit').value,
+      stock: Math.round((Number($('#pStock').value) || 0) * 1000) / 1000, reorder: Number($('#pReorder').value) || 0,
+    };
+    if (!d.name || !d.code || !(d.price >= 0) || $('#pPrice').value === '') return toast('Name, barcode and price are required');
+    if (state.products.some(p => p.code === d.code && p.id !== editingId)) return toast('That barcode is already used');
+    if (editingId) Object.assign(byId(editingId), d);
+    else state.products.push({ id: 'p' + Date.now(), ...d });
+    save(); closeModals(); renderInventory(); toast('Product saved');
+  };
+  $('#exportInv').onclick = () => download(`inventory-${today()}.csv`,
+    csv([['Barcode', 'Name', 'Category', 'Price', 'Unit', 'Stock', 'Reorder at'],
+      ...state.products.map(p => [p.code, p.name, p.cat, p.price.toFixed(2), p.unit, p.stock, p.reorder])]), 'text/csv');
+
+  // ---------- Sales ----------
+  $('#salesDate').value = today();
+  $('#salesDate').onchange = renderSales;
+  const salesOn = d => state.sales.filter(s => s.date === d);
+
+  function renderSales() {
+    const all = salesOn($('#salesDate').value);
+    const live = all.filter(s => !s.refunded);
+    const rev = r2(live.reduce((s, x) => s + x.total, 0));
+    $('#kRev').textContent = money(rev);
+    $('#kTx').textContent = live.length;
+    $('#kAvg').textContent = money(live.length ? rev / live.length : 0);
+    $('#kTax').textContent = money(live.reduce((s, x) => s + x.tax, 0));
+
+    const top = {};
+    live.forEach(s => s.lines.forEach(l => {
+      const t = top[l.name] ||= { qty: 0, amt: 0, unit: l.unit };
+      t.qty += l.qty; t.amt += l.amount;
+    }));
+    $('#topBody').innerHTML = Object.entries(top).sort((a, b) => b[1].amt - a[1].amt).slice(0, 8)
+      .map(([n, t]) => `<tr><td>${esc(n)}</td><td class="num">${t.unit === 'kg' ? t.qty.toFixed(3) + ' kg' : t.qty}</td><td class="num">${money(t.amt)}</td></tr>`).join('')
+      || '<tr><td colspan="3" class="empty">No sales yet</td></tr>';
+
+    const mix = {};
+    live.forEach(s => { const m = mix[s.method] ||= { n: 0, amt: 0 }; m.n++; m.amt += s.total; });
+    $('#mixBody').innerHTML = Object.entries(mix).map(([k, m]) => `<tr><td>${k}</td><td class="num">${m.n}</td><td class="num">${money(m.amt)}</td></tr>`).join('')
+      || '<tr><td colspan="3" class="empty">No sales yet</td></tr>';
+
+    $('#salesBody').innerHTML = all.slice().reverse().map(s => `<tr class="${s.refunded ? 'refunded' : ''}">
+      <td>#${s.no}</td><td>${new Date(s.at).toLocaleTimeString()}</td><td class="num">${s.lines.length}</td>
+      <td>${s.method}</td><td class="num">${money(s.total)}</td>
+      <td style="white-space:nowrap;text-decoration:none"><button data-rc="${s.no}">Receipt</button> ${s.refunded ? '<span class="badge danger">Refunded</span>' : `<button class="danger" data-rf="${s.no}">Refund</button>`}</td>
+    </tr>`).join('') || '<tr><td colspan="6" class="empty">No transactions on this date</td></tr>';
+    $$('[data-rc]').forEach(b => b.onclick = () => showReceipt(state.sales.find(s => s.no === +b.dataset.rc)));
+    $$('[data-rf]').forEach(b => b.onclick = () => {
+      const s = state.sales.find(x => x.no === +b.dataset.rf);
+      if (!confirm(`Refund receipt #${s.no} for ${money(s.total)}? Stock will be returned.`)) return;
+      s.refunded = true;
+      s.lines.forEach(l => { const p = byId(l.id); if (p) p.stock = Math.round((p.stock + l.qty) * 1000) / 1000; });
+      save(); renderSales(); toast('Refunded — return ' + money(s.total) + ' to customer');
+    });
+  }
+  $('#exportSales').onclick = () => {
+    const d = $('#salesDate').value;
+    download(`sales-${d}.csv`, csv([['Receipt', 'Time', 'Item', 'Qty', 'Unit price', 'Line amount', 'Sale total', 'Method', 'Refunded'],
+      ...salesOn(d).flatMap(s => s.lines.map(l => [s.no, new Date(s.at).toLocaleTimeString(), l.name, l.qty, l.price.toFixed(2), l.amount.toFixed(2), s.total.toFixed(2), s.method, s.refunded ? 'yes' : 'no']))]), 'text/csv');
+  };
+
+  // ---------- Settings ----------
+  function renderSettings() {
+    const s = state.settings;
+    $('#sName').value = s.name; $('#sCur').value = s.currency; $('#sAddr').value = s.addr; $('#sTax').value = s.tax; $('#sFoot').value = s.footer;
+  }
+  $('#saveSettings').onclick = () => {
+    Object.assign(state.settings, {
+      name: $('#sName').value.trim() || 'My Store', currency: $('#sCur').value, addr: $('#sAddr').value,
+      tax: Math.max(0, Number($('#sTax').value) || 0), footer: $('#sFoot').value,
+    });
+    save(); $('#storeTitle').textContent = state.settings.name + ' POS'; toast('Settings saved');
+  };
+  $('#backupBtn').onclick = () => download(`pos-backup-${today()}.json`, JSON.stringify(state, null, 2), 'application/json');
+  $('#restoreBtn').onclick = () => $('#restoreFile').click();
+  $('#restoreFile').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      if (!Array.isArray(data.products) || !Array.isArray(data.sales) || !data.settings) throw 0;
+      if (!confirm('Replace all current data with this backup?')) return;
+      state = data; cart = []; save(); renderSettings(); toast('Backup restored');
+    } catch { toast('That file is not a valid POS backup'); }
+    e.target.value = '';
+  };
+  $('#resetBtn').onclick = () => {
+    if (!confirm('Erase ALL products, sales and settings and load demo data?')) return;
+    state = demoState(); cart = []; save(); renderSettings(); toast('Demo data loaded');
+  };
+
+  // ---------- Keyboard shortcuts ----------
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') return closeModals();
+    if (e.key === 'F2') { e.preventDefault(); showView('checkout'); $('#search').focus(); }
+    if (e.key === 'F9') { e.preventDefault(); if ($('#checkout').classList.contains('active')) openPay(); }
+  });
+
+  renderCheckout();
+})();
+</script>
+</body>
+</html>

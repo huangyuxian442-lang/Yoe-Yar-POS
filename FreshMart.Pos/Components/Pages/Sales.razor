@@ -1,0 +1,410 @@
+@page "/sales"
+@inject PosService Pos
+@inject UiService Ui
+@inject FileService Files
+@inject AuthService Auth
+@inject Loc L
+@inject IJSRuntime JS
+
+<section class="page">
+    <div class="toolbar">
+        <div class="chips">
+            @foreach (var p in Presets)
+            {
+                <button class="@(_preset == p ? "active" : "")" @onclick="() => ApplyPresetAsync(p)">@L["preset_" + p]</button>
+            }
+        </div>
+        <span class="spacer"></span>
+        <label class="inline">@L["from_date"]</label>
+        <input type="date" class="date" value="@_from.ToString("yyyy-MM-dd")" @onchange="e => OnDateChanged(e, true)" />
+        <label class="inline">@L["to_date"]</label>
+        <input type="date" class="date" value="@_to.ToString("yyyy-MM-dd")" @onchange="e => OnDateChanged(e, false)" />
+    </div>
+    <div class="toolbar">
+        <span class="period">@_from.ToString("dd-MM-yyyy")@(MultiDay ? " → " + _to.ToString("dd-MM-yyyy") + " · " + L.F("n_days", Days) : "")</span>
+        <span class="spacer"></span>
+        <button class="primary" @onclick="OpenCashCountAsync">💵 @L["cash_count"]</button>
+        @if (MultiDay) { <button @onclick="ExportDailyAsync">@L["export_daily"]</button> }
+        <button @onclick="ExportAsync">@L["export_csv"]</button>
+    </div>
+
+    <div class="cards">
+        <div class="card"><div class="k">@L["sales_total"]</div><div class="v">@Fmt.Money(Revenue)</div><div class="s">@L.F("n_sales", Live.Count())@(MultiDay ? " · " + L["avg_per_day"] + " " + Fmt.Money(Revenue / Days) : "")</div></div>
+        <div class="card good"><div class="k">@L["received_at_sale"]</div><div class="v">@Fmt.Money(Live.Sum(s => s.Paid))</div></div>
+        <div class="card bad"><div class="k">@L["credit_given"]</div><div class="v">@Fmt.Money(Live.Sum(s => s.Credit))</div></div>
+        <div class="card good"><div class="k">@L["debt_collected"]</div><div class="v">@Fmt.Money(_payments.Sum(p => p.Amount))</div></div>
+        <div class="card"><div class="k">@L["cash_in_drawer"]</div><div class="v">@Fmt.Money(CashIn(Live, _payments))</div><div class="s">@L["cash_in_drawer_hint"]</div></div>
+        @if (Auth.IsOwner)
+        {
+            <div class="card profit"><div class="k">@L["profit"]</div><div class="v">@Fmt.Money(Profit(Live))</div>
+                <div class="s">@L["margin"] @(Revenue > 0 ? Fmt.Num(Math.Round(Profit(Live) / Revenue * 100, 1), "0.#") + "%" : "—")
+                    @if (MissingCost > 0) { <span class="owe"> · @L.F("missing_cost", MissingCost)</span> }</div></div>
+        }
+    </div>
+
+    @if (MultiDay)
+    {
+        <h3>@L["daily_breakdown"]</h3>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>@L["date"]</th><th class="num">@L["sales_count"]</th><th class="num">@L["sales_total"]</th>
+                        <th class="num">@L["received_at_sale"]</th><th class="num">@L["credit_given"]</th>
+                        <th class="num">@L["debt_collected"]</th><th class="num">@L["cash_in_drawer"]</th>
+                        @if (Auth.IsOwner) { <th class="num">@L["profit"]</th> }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var d in DailyRows)
+                    {
+                        <tr>
+                            <td class="nowrap">@d.Day.ToString("dd-MM-yyyy") <span class="meta">@L.Day(d.Day)</span></td>
+                            <td class="num">@d.Count</td>
+                            <td class="num">@Fmt.Money(d.Total)</td>
+                            <td class="num">@Fmt.Money(d.Received)</td>
+                            <td class="num owe">@(d.Credit > 0 ? Fmt.Money(d.Credit) : "")</td>
+                            <td class="num">@(d.Collected > 0 ? Fmt.Money(d.Collected) : "")</td>
+                            <td class="num">@Fmt.Money(d.Cash)</td>
+                            @if (Auth.IsOwner) { <td class="num good">@Fmt.Money(d.Profit)</td> }
+                        </tr>
+                    }
+                    @if (!DailyRows.Any()) { <tr><td colspan="7" class="empty">@L["no_sales_yet"]</td></tr> }
+                </tbody>
+                @if (DailyRows.Any())
+                {
+                    <tfoot>
+                        <tr class="total-row">
+                            <td>@L["total_row"]</td>
+                            <td class="num">@Live.Count()</td>
+                            <td class="num">@Fmt.Money(Revenue)</td>
+                            <td class="num">@Fmt.Money(Live.Sum(s => s.Paid))</td>
+                            <td class="num owe">@Fmt.Money(Live.Sum(s => s.Credit))</td>
+                            <td class="num">@Fmt.Money(_payments.Sum(p => p.Amount))</td>
+                            <td class="num">@Fmt.Money(CashIn(Live, _payments))</td>
+                            @if (Auth.IsOwner) { <td class="num good">@Fmt.Money(Profit(Live))</td> }
+                        </tr>
+                    </tfoot>
+                }
+            </table>
+        </div>
+    }
+
+    <div class="two">
+        <div>
+            <h3>@L["top_sellers"]</h3>
+            <table>
+                <thead><tr><th>@L["product_name"]</th><th class="num">@L["qty"]</th><th class="num">@L["amount"]</th>@if (Auth.IsOwner) { <th class="num">@L["profit"]</th> }</tr></thead>
+                <tbody>
+                    @foreach (var t in TopSellers)
+                    {
+                        <tr>
+                            <td>@t.Name <span class="badge @(t.Pack == PackType.Ctn ? "ctn" : "pcs")">@L.Pack(t.Pack)</span></td>
+                            <td class="num">@(t.Unit == SellUnit.Kg ? Fmt.Qty(t.Qty, t.Unit) : Fmt.Num(t.Qty))</td>
+                            <td class="num">@Fmt.Money(t.Amount)</td>
+                            @if (Auth.IsOwner) { <td class="num">@(t.HasCost ? Fmt.Money(t.Profit) : "—")</td> }
+                        </tr>
+                    }
+                    @if (!TopSellers.Any()) { <tr><td colspan="4" class="empty">@L["no_sales_yet"]</td></tr> }
+                </tbody>
+            </table>
+        </div>
+        <div>
+            <h3>@L["payment_mix"]</h3>
+            <table>
+                <thead><tr><th>@L["method"]</th><th class="num">@L["amount"]</th></tr></thead>
+                <tbody>
+                    <tr><td>@L["method_cash"]</td><td class="num">@Fmt.Money(Live.Where(s => s.Method == "Cash").Sum(s => s.Paid))</td></tr>
+                    <tr><td>@L["method_mobile"]</td><td class="num">@Fmt.Money(Live.Where(s => s.Method == "Mobile").Sum(s => s.Paid))</td></tr>
+                    <tr><td>@L["method_credit"]</td><td class="num">@Fmt.Money(Live.Sum(s => s.Credit))</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <h3>@L["transactions"]</h3>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>@L["receipt_no"]</th><th>@(MultiDay ? L["date"] : L["time"])</th><th>@L["customer"]</th><th>@L["method"]</th><th class="num">@L["total"]</th><th class="num">@L["credit"]</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var s in _sales.Take(MaxRows))
+                {
+                    <tr class="@(s.Refunded ? "refunded" : "")">
+                        <td class="strike">#@s.ReceiptNo</td>
+                        <td class="strike nowrap">@s.CreatedAt.ToString(MultiDay ? "dd-MM HH:mm" : "HH:mm")</td>
+                        <td class="strike">@(s.CustomerName.Length > 0 ? s.CustomerName : L["walk_in"])</td>
+                        <td class="strike">@L.Method(s.Method)@(s.Credit > 0 && s.Paid > 0 ? " + " + L["method_credit"] : "")</td>
+                        <td class="num strike">@Fmt.Money(s.Total)</td>
+                        <td class="num strike">@(s.Credit > 0 ? Fmt.Money(s.Credit) : "")</td>
+                        <td class="nowrap">
+                            <button @onclick="() => _receipt = s">@L["receipt"]</button>
+                            @if (s.Refunded) { <span class="badge danger">@L["refunded"]</span> }
+                            else { <button class="danger" @onclick="() => RefundAsync(s)">@L["refund"]</button> }
+                        </td>
+                    </tr>
+                }
+                @if (_sales.Count == 0) { <tr><td colspan="7" class="empty">@L["no_transactions"]</td></tr> }
+            </tbody>
+        </table>
+    </div>
+    @if (_sales.Count > MaxRows) { <p class="muted">@L.F("showing_latest", MaxRows, _sales.Count)</p> }
+
+    <h3>@L["cash_counts"]</h3>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>@L["date"]</th><th>@L["staff"]</th><th class="num">@L["opening_float"]</th><th class="num">@L["expected"]</th><th class="num">@L["counted"]</th><th class="num">@L["difference"]</th><th>@L["note"]</th></tr></thead>
+            <tbody>
+                @foreach (var c in _closes)
+                {
+                    <tr>
+                        <td class="nowrap">@c.Day.ToString("dd-MM-yyyy") <span class="meta">@c.CreatedAt.ToString("HH:mm")</span></td>
+                        <td>@c.StaffName</td>
+                        <td class="num">@Fmt.Money(c.OpeningFloat)</td>
+                        <td class="num">@Fmt.Money(c.Expected)</td>
+                        <td class="num">@Fmt.Money(c.Counted)</td>
+                        <td class="num"><span class="badge @(c.Difference == 0 ? "pcs" : c.Difference < 0 ? "danger" : "warn")">@DiffText(c.Difference)</span></td>
+                        <td>@c.Note</td>
+                    </tr>
+                }
+                @if (_closes.Count == 0) { <tr><td colspan="7" class="empty">@L["no_cash_counts"]</td></tr> }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<Modal @bind-Open="_countOpen" Title="@("💵 " + L["cash_count"])">
+    <ChildContent>
+        <div class="form-grid">
+            <div><label>@L["date"]</label><input type="date" value="@_countDay.ToString("yyyy-MM-dd")" @onchange="OnCountDayChanged" /></div>
+            <div><label>@L["opening_float"]</label><input type="number" min="0" @bind="_float" @bind:event="oninput" /></div>
+        </div>
+        @if (_expected is { } ex)
+        {
+            var exp = ex with { OpeningFloat = _float };
+            <div class="expect-box">
+                <div class="r"><span>@L["opening_float"]</span><span>@Fmt.Money(exp.OpeningFloat)</span></div>
+                <div class="r"><span>+ @L["cash_sales"]</span><span>@Fmt.Money(exp.CashSales)</span></div>
+                <div class="r"><span>+ @L["cash_debt_payments"]</span><span>@Fmt.Money(exp.CashCollected)</span></div>
+                @if (exp.CashRefunds > 0) { <div class="r"><span>− @L["cash_refunds"]</span><span>@Fmt.Money(exp.CashRefunds)</span></div> }
+                <div class="r big"><b>@L["expected"]</b><b>@Fmt.Money(exp.Expected)</b></div>
+            </div>
+
+            <label>@L["count_notes"]</label>
+            <div class="notes-grid">
+                @foreach (var n in Notes)
+                {
+                    <div class="note-row">
+                        <span class="note-val">@Fmt.Money(n)</span>
+                        <span>×</span>
+                        <input type="number" min="0" step="1" value="@(_noteCounts.GetValueOrDefault(n) is var q && q > 0 ? q : null)"
+                               @oninput="e => SetNote(n, e.Value)" />
+                        <span class="num">@Fmt.Money(n * _noteCounts.GetValueOrDefault(n))</span>
+                    </div>
+                }
+            </div>
+            <label style="margin-top:10px">@L["counted_total"]</label>
+            <input class="big" type="number" min="0" @bind="_counted" @bind:event="oninput" />
+
+            <div class="pay-summary">
+                <div class="ps"><span>@L["expected"]</span><b>@Fmt.Money(exp.Expected)</b></div>
+                <div class="ps"><span>@L["counted"]</span><b>@Fmt.Money(_counted ?? 0)</b></div>
+                @if (_counted is { } cnt)
+                {
+                    var diff = cnt - exp.Expected;
+                    <div class="ps @(diff < 0 ? "credit on" : diff > 0 ? "warnbox" : "paid")"><span>@L["difference"]</span><b>@DiffText(diff)</b></div>
+                }
+            </div>
+            <label style="margin-top:10px">@L["note"]</label>
+            <input @bind="_countNote" placeholder="@L["cash_note_placeholder"]" />
+        }
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _countOpen = false">@L["cancel"]</button>
+        <button class="primary" disabled="@(_counted is null)" @onclick="SaveCountAsync">@L["save"]</button>
+    </Actions>
+</Modal>
+
+<Modal Open="_receipt is not null" OpenChanged="@(_ => _receipt = null)">
+    <ChildContent>@if (_receipt is not null) { <Receipt Sale="_receipt" Lines="LinesOf(_receipt)" /> }</ChildContent>
+    <Actions>
+        <button @onclick="() => _receipt = null">@L["close"]</button>
+        <button class="primary" @onclick="@(() => JS.InvokeVoidAsync("pos.print").AsTask())">@L["print"]</button>
+    </Actions>
+</Modal>
+
+@code {
+    const int MaxRows = 300;
+    static readonly string[] Presets = ["today", "yesterday", "week", "month", "last_month"];
+
+    string? _preset = "today";
+    DateTime _from = DateTime.Today, _to = DateTime.Today;
+    List<Sale> _sales = [];
+    List<SaleLine> _lines = [];
+    List<CustomerPayment> _payments = [];
+    Sale? _receipt;
+
+    bool MultiDay => _to > _from;
+    int Days => (_to - _from).Days + 1;
+    IEnumerable<Sale> Live => _sales.Where(s => !s.Refunded);
+    decimal Revenue => Live.Sum(s => s.Total);
+    List<SaleLine> LinesOf(Sale s) => _lines.Where(l => l.SaleId == s.Id).ToList();
+
+    /// Cash taken at the till + cash debt payments.
+    static decimal CashIn(IEnumerable<Sale> sales, IEnumerable<CustomerPayment> pays) =>
+        sales.Where(s => s.Method == "Cash").Sum(s => s.Paid) + pays.Where(p => p.Method == "Cash").Sum(p => p.Amount);
+
+    record DayRow(DateTime Day, int Count, decimal Total, decimal Received, decimal Credit, decimal Collected, decimal Cash, decimal Profit);
+
+    /// Gross profit = line amounts − cost of goods − sale discount. Lines without a cost price count as 0 cost.
+    decimal Profit(IEnumerable<Sale> sales)
+    {
+        var ids = sales.Select(s => s.Id).ToHashSet();
+        return _lines.Where(l => ids.Contains(l.SaleId)).Sum(l => l.Profit) - sales.Sum(s => s.Discount);
+    }
+
+    int MissingCost => _lines.Count(l => l.Cost == 0 && Live.Any(s => s.Id == l.SaleId));
+
+    /// One row per day that had sales or debt payments.
+    IEnumerable<DayRow> DailyRows
+    {
+        get
+        {
+            var sales = Live.GroupBy(s => s.CreatedAt.Date).ToDictionary(g => g.Key, g => g.ToList());
+            var pays = _payments.GroupBy(p => p.CreatedAt.Date).ToDictionary(g => g.Key, g => g.ToList());
+            return sales.Keys.Union(pays.Keys).Order().Select(d =>
+            {
+                var s = sales.GetValueOrDefault(d) ?? [];
+                var p = pays.GetValueOrDefault(d) ?? [];
+                return new DayRow(d, s.Count, s.Sum(x => x.Total), s.Sum(x => x.Paid), s.Sum(x => x.Credit), p.Sum(x => x.Amount), CashIn(s, p), Profit(s));
+            });
+        }
+    }
+
+    record TopRow(string Name, PackType Pack, SellUnit Unit, decimal Qty, decimal Amount, decimal Profit, bool HasCost);
+
+    IEnumerable<TopRow> TopSellers =>
+        _lines.Where(l => Live.Any(s => s.Id == l.SaleId))
+              .GroupBy(l => (Name: L.Name(l), l.Pack, l.Unit))
+              .Select(g => new TopRow(g.Key.Name, g.Key.Pack, g.Key.Unit, g.Sum(l => l.Qty), g.Sum(l => l.Amount), g.Sum(l => l.Profit), g.All(l => l.Cost > 0)))
+              .OrderByDescending(t => t.Amount).Take(10);
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    async Task LoadAsync()
+    {
+        _sales = await Pos.GetSalesAsync(_from, _to);
+        _lines = await Pos.GetLinesAsync(_sales.Select(s => s.Id));
+        _payments = await Pos.GetPaymentsAsync(_from, _to);
+        _closes = await Pos.GetCashClosesAsync(_from, _to);
+    }
+
+    // ---------- end-of-day cash count ----------
+    List<CashClose> _closes = [];
+    bool _countOpen;
+    DateTime _countDay = DateTime.Today;
+    decimal _float;
+    CashExpected? _expected;
+    decimal? _counted;
+    string _countNote = "";
+    readonly Dictionary<decimal, int> _noteCounts = [];
+
+    decimal[] Notes => Pos.Settings.Decimals == 0 ? [10000, 5000, 1000, 500, 200, 100, 50] : [100, 50, 20, 10, 5, 1];
+
+    string DiffText(decimal d) => d == 0 ? L["balanced"] : d < 0 ? L["short"] + " " + Fmt.Money(-d) : L["over"] + " " + Fmt.Money(d);
+
+    async Task OpenCashCountAsync()
+    {
+        _countDay = DateTime.Today; _float = Pos.Settings.OpeningFloat; _counted = null; _countNote = ""; _noteCounts.Clear();
+        _expected = await Pos.GetCashExpectedAsync(_countDay, _float);
+        _countOpen = true;
+    }
+
+    async Task OnCountDayChanged(ChangeEventArgs e)
+    {
+        if (!DateTime.TryParse(e.Value?.ToString(), out var d)) return;
+        _countDay = d.Date;
+        _expected = await Pos.GetCashExpectedAsync(_countDay, _float);
+    }
+
+    void SetNote(decimal note, object? value)
+    {
+        _noteCounts[note] = int.TryParse(value?.ToString(), out var q) && q > 0 ? q : 0;
+        var sum = _noteCounts.Sum(kv => kv.Key * kv.Value);
+        _counted = sum > 0 ? sum : _counted;
+    }
+
+    async Task SaveCountAsync()
+    {
+        if (_expected is null || _counted is null) return;
+        var c = await Pos.SaveCashCloseAsync(_countDay, _expected with { OpeningFloat = _float }, _counted.Value, _countNote);
+        _countOpen = false;
+        await LoadAsync();
+        Ui.ShowToast(L["cash_count_saved"] + " — " + DiffText(c.Difference));
+    }
+
+    async Task ApplyPresetAsync(string preset)
+    {
+        var today = DateTime.Today;
+        var monthStart = new DateTime(today.Year, today.Month, 1);
+        (_from, _to) = preset switch
+        {
+            "yesterday" => (today.AddDays(-1), today.AddDays(-1)),
+            "week" => (today.AddDays(-(((int)today.DayOfWeek + 6) % 7)), today),   // Monday → today
+            "month" => (monthStart, today),
+            "last_month" => (monthStart.AddMonths(-1), monthStart.AddDays(-1)),
+            _ => (today, today),
+        };
+        _preset = preset;
+        await LoadAsync();
+    }
+
+    async Task OnDateChanged(ChangeEventArgs e, bool isFrom)
+    {
+        if (!DateTime.TryParse(e.Value?.ToString(), out var d)) return;
+        if (isFrom) _from = d.Date; else _to = d.Date;
+        if (_from > _to) (_from, _to) = (_to, _from);
+        _preset = null;
+        await LoadAsync();
+    }
+
+    async Task RefundAsync(Sale s)
+    {
+        if (!await Auth.RequireOwnerAsync($"{L["refund"]} #{s.ReceiptNo} ({Fmt.Money(s.Total)})")) return;
+        var plan = await Pos.GetRefundPlanAsync(s);
+        var msg = L.F("refund_q", s.ReceiptNo, Fmt.Money(s.Total));
+        if (plan.CreditCancelled > 0) msg += "\n" + L.F("refund_credit_cancel", Fmt.Money(plan.CreditCancelled));
+        if (plan.SettledReturned > 0) msg += "\n" + L.F("refund_settled_back", Fmt.Money(plan.SettledReturned));
+        msg += "\n\n" + L["money_to_return"] + ": " + Fmt.Money(plan.ReturnNow);
+        if (!await Ui.ConfirmAsync(L["refund"], msg)) return;
+        var done = await Pos.RefundAsync(s.Id);
+        await LoadAsync();
+        if (done is not null) Ui.ShowToast(L.F("refunded_return", Fmt.Money(done.ReturnNow)));
+    }
+
+    string RangeName => MultiDay ? $"{_from:yyyy-MM-dd}_to_{_to:yyyy-MM-dd}" : $"{_from:yyyy-MM-dd}";
+
+    async Task ExportAsync()
+    {
+        var csv = Fmt.Csv([
+            ["Receipt", "Date", "Time", "Customer", "Item", "Pack", "Qty", "Unit price", "Line amount", "Sale total", "Paid", "Credit", "Method", "Refunded"],
+            .. _sales.OrderBy(s => s.CreatedAt).SelectMany(s => LinesOf(s).Select(l => new object?[] {
+                s.ReceiptNo, s.CreatedAt.ToString("yyyy-MM-dd"), s.CreatedAt.ToString("HH:mm:ss"), s.CustomerName, l.Name,
+                l.Pack == PackType.Ctn ? $"CTN x{l.UnitsPerPack}" : "PCS",
+                l.Qty, l.Price, l.Amount, s.Total, s.Paid, s.Credit, s.Method, s.Refunded ? "yes" : "no" }))
+        ]);
+        Ui.ShowToast(await Files.SaveAsync($"sales-{RangeName}.csv", csv));
+    }
+
+    async Task ExportDailyAsync()
+    {
+        var rows = DailyRows.ToList();
+        var csv = Fmt.Csv([
+            ["Date", "Sales", "Total sales", "Received at sale", "Credit given", "Debt collected", "Cash in drawer", .. (Auth.IsOwner ? new[] { "Profit" } : Array.Empty<string>())],
+            .. rows.Select(d => (object?[])[ d.Day.ToString("yyyy-MM-dd"), d.Count, d.Total, d.Received, d.Credit, d.Collected, d.Cash,
+                                            .. (Auth.IsOwner ? new object?[] { d.Profit } : Array.Empty<object?>()) ]),
+            ["TOTAL", rows.Sum(d => d.Count), rows.Sum(d => d.Total), rows.Sum(d => d.Received), rows.Sum(d => d.Credit), rows.Sum(d => d.Collected), rows.Sum(d => d.Cash),
+             .. (Auth.IsOwner ? new object?[] { rows.Sum(d => d.Profit) } : Array.Empty<object?>())]
+        ]);
+        Ui.ShowToast(await Files.SaveAsync($"daily-summary-{RangeName}.csv", csv));
+    }
+}

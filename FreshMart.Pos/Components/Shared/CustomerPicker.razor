@@ -1,0 +1,119 @@
+@inject PosService Pos
+@inject UiService Ui
+@inject Loc L
+@inject IJSRuntime JS
+
+<Modal Open="Open" OpenChanged="OpenChanged" Title="@L["choose_customer"]">
+    <ChildContent>
+        @if (!_adding)
+        {
+            <input id="custSearch" placeholder="@L["search_name_phone"]" @bind="_q" @bind:event="oninput" @onkeydown="OnKey" />
+            <div class="pick-list">
+                <button class="pick walkin" @onclick="() => Select(null)">
+                    <span>👤 @L["walk_in"]</span>
+                </button>
+                @foreach (var d in Matches)
+                {
+                    <button class="pick" @onclick="() => Select(d.Customer)">
+                        <span class="pick-name">
+                            @d.Customer.Name
+                            @if (d.Customer.IsWholesale) { <span class="badge ctn">@L["wholesale"]</span> }
+                        </span>
+                        <span class="pick-meta">@d.Customer.Phone · @L.Term(d.Customer.Term)</span>
+                        <span class="pick-bal @(d.Balance > 0 ? "owe" : d.Balance < 0 ? "shop-owes" : "")">@(d.Balance > 0 ? L["owes"] + " " + Fmt.Money(d.Balance)
+                            : d.Balance < 0 ? L["shop_owes"] + " " + Fmt.Money(-d.Balance) : L["no_debt"])</span>
+                    </button>
+                }
+                @if (!Matches.Any()) { <div class="empty">@L["no_customers_found"]</div> }
+            </div>
+        }
+        else
+        {
+            <div class="form-grid">
+                <div class="full"><label>@L["customer_name"] *</label><input id="newCustName" @bind="_new.Name" /></div>
+                <div><label>@L["phone"]</label><input @bind="_new.Phone" /></div>
+                <div>
+                    <label>@L["credit_term"]</label>
+                    <select @bind="_new.Term">
+                        @foreach (var t in Enum.GetValues<CreditTerm>()) { <option value="@t">@L.Term(t)</option> }
+                    </select>
+                </div>
+                <div><label>@L["credit_limit"]</label><input type="number" min="0" @bind="_new.CreditLimit" /></div>
+                <div><label class="check"><input type="checkbox" @bind="_new.IsWholesale" /> @L["wholesale_customer"]</label></div>
+            </div>
+        }
+    </ChildContent>
+    <Actions>
+        @if (_adding)
+        {
+            <button @onclick="() => _adding = false">@L["back"]</button>
+            <button class="primary" @onclick="SaveNewAsync">@L["save_and_select"]</button>
+        }
+        else
+        {
+            <button @onclick="StartAdd">+ @L["new_customer"]</button>
+            <button @onclick="() => OpenChanged.InvokeAsync(false)">@L["cancel"]</button>
+        }
+    </Actions>
+</Modal>
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter] public EventCallback<Customer?> OnSelect { get; set; }
+
+    List<DebtSummary> _all = [];
+    string _q = "";
+    bool _adding, _wasOpen;
+    Customer _new = new();
+
+    IEnumerable<DebtSummary> Matches => _all
+        .Where(d => d.Customer.Active)
+        .Where(d => _q.Length == 0 || d.Customer.Name.Contains(_q, StringComparison.OrdinalIgnoreCase) || d.Customer.Phone.Replace(" ", "").Contains(_q.Replace(" ", "")))
+        .OrderByDescending(d => d.Balance > 0).ThenBy(d => d.Customer.Name)
+        .Take(50);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Open && !_wasOpen)
+        {
+            _q = ""; _adding = false; _focus = "custSearch";
+            _all = await Pos.GetDebtsAsync();
+        }
+        _wasOpen = Open;
+    }
+
+    string? _focus;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focus is null || !Open) return;
+        var id = _focus; _focus = null;
+        await JS.InvokeVoidAsync("pos.focus", id);
+    }
+
+    async Task OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && Matches.FirstOrDefault() is { } d) await Select(d.Customer);
+    }
+
+    async Task Select(Customer? c)
+    {
+        await OnSelect.InvokeAsync(c);
+        await OpenChanged.InvokeAsync(false);
+    }
+
+    void StartAdd()
+    {
+        // a search that looks like a phone number pre-fills the phone, otherwise the name
+        var digits = _q.Count(char.IsDigit) >= 5;
+        _new = new Customer { Name = digits ? "" : _q, Phone = digits ? _q : "" };
+        _adding = true;
+        _focus = "newCustName";
+    }
+
+    async Task SaveNewAsync()
+    {
+        if (await Pos.SaveCustomerAsync(_new) is { } err) { Ui.ShowToast(err); return; }
+        await Select(_new);
+    }
+}

@@ -1,0 +1,16 @@
+bin/
+obj/
+.vs/
+*.user
+# licence server data: the signing key must never be committed
+FreshMart.LicenseServer/App_Data/
+# built files for shops: rebuild with build-release.ps1 (too large for git)
+release/
+# never commit databases, signing keys or keystores
+*.db
+*.db3
+*.db-*
+*.pem
+*.keystore
+*.jks
+license.json

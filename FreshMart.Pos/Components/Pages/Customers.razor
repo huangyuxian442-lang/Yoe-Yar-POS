@@ -1,0 +1,134 @@
+@page "/customers"
+@inject PosService Pos
+@inject UiService Ui
+@inject FileService Files
+@inject AuthService Auth
+@inject Loc L
+
+<section class="page">
+    <div class="toolbar">
+        <input class="filter" placeholder="@L["search_name_phone"]" @bind="_q" @bind:event="oninput" />
+        <div class="chips">
+            @foreach (var f in new[] { "all", "daily", "weekly", "monthly", "wholesale" })
+            {
+                <button class="@(_filter == f ? "active" : "")" @onclick="() => _filter = f">@L["filter_" + f]</button>
+            }
+        </div>
+        <span class="spacer"></span>
+        <button @onclick="ExportAsync">@L["export_csv"]</button>
+        <button class="primary" @onclick="() => Edit(null)">+ @L["new_customer"]</button>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead><tr><th>@L["customer_name"]</th><th>@L["phone"]</th><th>@L["address"]</th><th>@L["credit_term"]</th><th>@L["type"]</th><th class="num">@L["credit_limit"]</th><th class="num">@L["balance"]</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var d in Rows)
+                {
+                    var c = d.Customer;
+                    <tr class="@(d.IsOverdue ? "low" : "")">
+                        <td><b>@c.Name</b>@if (c.Note.Length > 0) { <div class="meta">@c.Note</div> }</td>
+                        <td class="nowrap">@c.Phone</td>
+                        <td>@c.Address</td>
+                        <td><span class="badge term">@L.Term(c.Term)</span></td>
+                        <td>@if (c.IsWholesale) { <span class="badge ctn">@L["wholesale"]</span> } else { <span class="badge pcs">@L["retail"]</span> }</td>
+                        <td class="num">@(c.CreditLimit > 0 ? Fmt.Money(c.CreditLimit) : "—")</td>
+                        <td class="num">
+                            @if (d.Balance > 0) { <b class="owe">@Fmt.Money(d.Balance)</b> }
+                                else if (d.Balance < 0) { <b class="shop-owes">@L["shop_owes"] @Fmt.Money(-d.Balance)</b> }
+                                else { <span class="muted">0</span> }
+                            @if (d.IsOverdue) { <div><span class="badge danger">@L.F("overdue_days", d.OverdueDays)</span></div> }
+                        </td>
+                        <td class="nowrap">
+                            <button @onclick="() => Edit(c)">@L["edit"]</button>
+                            <button class="danger" @onclick="() => DeleteAsync(c)">@L["delete"]</button>
+                        </td>
+                    </tr>
+                }
+                @if (!Rows.Any()) { <tr><td colspan="8" class="empty">@L["no_customers_found"]</td></tr> }
+            </tbody>
+        </table>
+    </div>
+    <p class="muted">@L["customers_hint"] <a href="debts">@L["nav_debts"] →</a></p>
+</section>
+
+<Modal @bind-Open="_editOpen" Title="@(_edit.Id == 0 ? L["new_customer"] : L["edit_customer"])">
+    <ChildContent>
+        <div class="form-grid">
+            <div class="full"><label>@L["customer_name"] *</label><input @bind="_edit.Name" /></div>
+            <div><label>@L["phone"]</label><input @bind="_edit.Phone" /></div>
+            <div><label>@L["address"]</label><input @bind="_edit.Address" /></div>
+            <div>
+                <label>@L["credit_term"]</label>
+                <select @bind="_edit.Term">
+                    @foreach (var t in Enum.GetValues<CreditTerm>()) { <option value="@t">@L.Term(t)</option> }
+                </select>
+            </div>
+            <div><label>@L["credit_limit"] (0 = @L["no_limit"])</label><input type="number" min="0" @bind="_edit.CreditLimit" /></div>
+            <div class="full"><label class="check"><input type="checkbox" @bind="_edit.IsWholesale" /> @L["wholesale_customer"] — @L["wholesale_hint"]</label></div>
+            <div class="full"><label>@L["note"]</label><input @bind="_edit.Note" /></div>
+        </div>
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _editOpen = false">@L["cancel"]</button>
+        <button class="primary" @onclick="SaveAsync">@L["save"]</button>
+    </Actions>
+</Modal>
+
+@code {
+    List<DebtSummary> _rows = [];
+    string _q = "", _filter = "all";
+    bool _editOpen;
+    Customer _edit = new();
+
+    IEnumerable<DebtSummary> Rows => _rows
+        .Where(d => d.Customer.Active)
+        .Where(d => _filter switch
+        {
+            "daily" => d.Customer.Term == CreditTerm.Daily,
+            "weekly" => d.Customer.Term == CreditTerm.Weekly,
+            "monthly" => d.Customer.Term == CreditTerm.Monthly,
+            "wholesale" => d.Customer.IsWholesale,
+            _ => true,
+        })
+        .Where(d => _q.Length == 0 || d.Customer.Name.Contains(_q, StringComparison.OrdinalIgnoreCase) || d.Customer.Phone.Replace(" ", "").Contains(_q.Replace(" ", "")))
+        .OrderBy(d => d.Customer.Name);
+
+    protected override async Task OnInitializedAsync() => _rows = await Pos.GetDebtsAsync();
+
+    void Edit(Customer? c)
+    {
+        _edit = c is null ? new Customer() : new Customer
+        {
+            Id = c.Id, Name = c.Name, Phone = c.Phone, Address = c.Address, Term = c.Term, CreditLimit = c.CreditLimit,
+            IsWholesale = c.IsWholesale, Note = c.Note, Active = c.Active, CreatedAt = c.CreatedAt,
+        };
+        _editOpen = true;
+    }
+
+    async Task SaveAsync()
+    {
+        if (await Pos.SaveCustomerAsync(_edit) is { } err) { Ui.ShowToast(err); return; }
+        _editOpen = false;
+        _rows = await Pos.GetDebtsAsync();
+        Ui.ShowToast(L["saved"]);
+    }
+
+    async Task DeleteAsync(Customer c)
+    {
+        if (!await Auth.RequireOwnerAsync(L["delete"] + " — " + c.Name)) return;
+        if (!await Ui.ConfirmAsync(L["delete"], L.F("delete_customer_q", c.Name))) return;
+        if (await Pos.DeleteCustomerAsync(c) is { } err) { Ui.ShowToast(err); return; }
+        _rows = await Pos.GetDebtsAsync();
+    }
+
+    async Task ExportAsync()
+    {
+        var csv = Fmt.Csv([
+            ["Name", "Phone", "Address", "Term", "Wholesale", "Credit limit", "Balance", "Overdue days"],
+            .. _rows.Where(d => d.Customer.Active).Select(d => new object?[] {
+                d.Customer.Name, d.Customer.Phone, d.Customer.Address, d.Customer.Term, d.Customer.IsWholesale ? "yes" : "no",
+                d.Customer.CreditLimit, d.Balance, d.OverdueDays })
+        ]);
+        Ui.ShowToast(await Files.SaveAsync($"customers-{DateTime.Now:yyyy-MM-dd}.csv", csv));
+    }
+}

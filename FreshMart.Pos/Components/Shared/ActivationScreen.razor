@@ -1,0 +1,53 @@
+@inject LicenseService License
+@inject PosService Pos
+@inject Loc L
+
+<div class="login">
+    <div class="login-box">
+        <div class="login-lang lang">
+            <button class="@(L.IsMy ? "active" : "")" @onclick="@(() => Pos.SetLanguageAsync("my"))">မြန်မာ</button>
+            <button class="@(L.IsMy ? "" : "active")" @onclick="@(() => Pos.SetLanguageAsync("en"))">EN</button>
+        </div>
+        <h1>@AppBrand.Name</h1>
+        <h2>@L["act_title"]</h2>
+        <p class="muted">@L["act_hint"]</p>
+        <div class="form-grid one">
+            <div>
+                <label>@L["act_code"]</label>
+                <input id="shopCode" class="code-input" @bind="_code" @bind:event="oninput" placeholder="YY-XXXX-XXXX" autocapitalize="characters" autocomplete="off" @onkeydown="KeyAsync" />
+            </div>
+        </div>
+        @if (_error is not null) { <div class="alert danger">@L[_error]</div> }
+        <div class="actions"><button class="primary big-btn" disabled="@_busy" @onclick="ActivateAsync">@(_busy ? "…" : L["act_button"])</button></div>
+        <p class="meta">@L["device_id"]: @License.DeviceId[..8]</p>
+    </div>
+</div>
+
+@code {
+    [Parameter] public EventCallback OnDone { get; set; }
+    string _code = "";
+    string? _error;
+    bool _busy;
+
+    async Task KeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await ActivateAsync();
+    }
+
+    async Task ActivateAsync()
+    {
+        if (_busy) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            _error = await License.ActivateAsync(_code);
+            if (_error is null)
+            {
+                await Pos.SyncShopNameAsync();
+                await OnDone.InvokeAsync();
+            }
+        }
+        finally { _busy = false; }
+    }
+}

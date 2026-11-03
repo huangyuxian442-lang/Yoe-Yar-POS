@@ -1,0 +1,408 @@
+@page "/"
+@implements IAsyncDisposable
+@inject PosService Pos
+@inject CartService Cart
+@inject UiService Ui
+@inject AuthService Auth
+@inject LicenseService License
+@inject Loc L
+@inject IJSRuntime JS
+
+<section class="checkout">
+    <div class="catalog">
+        <div class="mode-row">
+            <div class="mode-toggle" title="F4">
+                <button class="pcs @(Ctn ? "" : "active")" @onclick="() => Cart.SetMode(PackType.Pcs)">@L["mode_pcs"]</button>
+                <button class="ctn @(Ctn ? "active" : "")" @onclick="() => Cart.SetMode(PackType.Ctn)">@L["mode_ctn"]</button>
+            </div>
+            <span class="mode-hint @(Ctn ? "ctn" : "pcs")">@(Ctn ? L["mode_ctn_hint"] : L["mode_pcs_hint"])</span>
+        </div>
+        <input id="search" class="search @(Ctn ? "ctn" : "pcs")" placeholder="@L["search_placeholder"]" autocomplete="off"
+               @bind="_search" @bind:event="oninput" @onkeydown="OnSearchKey" />
+        <div class="cats">
+            @foreach (var c in _categories)
+            {
+                <button class="@(c == _cat ? "active" : "")" @onclick="() => _cat = c">@(c == "*" ? L["all"] : c)</button>
+            }
+        </div>
+        <div class="grid">
+            @foreach (var p in Visible)
+            {
+                <button class="tile @(p.IsOut ? "out" : p.IsLow ? "low" : "")" @onclick="() => AddAsync(p)">
+                    <span class="name">@L.Name(p)</span>
+                    <span class="price pcs @(Ctn && p.HasCtn ? "dim" : "")">@Fmt.Money(p.Price) <small>/ @(p.Unit == SellUnit.Kg ? "kg" : L["pcs"])</small></span>
+                    @if (p.HasCtn)
+                    {
+                        <span class="price ctn @(Ctn ? "" : "dim")">@Fmt.Money(p.CtnPrice) <small>/ @L["ctn"] (@p.CtnQty)</small></span>
+                    }
+                    <span class="stock">@(p.IsOut ? L["out_of_stock"] : L["stock"] + ": " + Fmt.Stock(p, L))</span>
+                </button>
+            }
+            @if (!Visible.Any()) { <div class="empty">@L["no_products_found"]</div> }
+        </div>
+    </div>
+
+    <aside class="cart">
+        <div class="cart-head">
+            <button class="customer-chip @(Cart.Customer is null ? "" : "set")" @onclick="() => _pickerOpen = true">
+                @if (Cart.Customer is { } cust)
+                {
+                    <span class="cc-name">👤 @cust.Name</span>
+                    <span class="cc-meta">
+                        @L.Term(cust.Term)
+                        @if (cust.IsWholesale) { <span class="badge ctn">@L["wholesale"]</span> }
+                        @if (_custBalance > 0) { <span class="badge warn">@L["owes"] @Fmt.Money(_custBalance)</span> }
+                    </span>
+                }
+                else
+                {
+                    <span class="cc-name">👤 @L["walk_in"]</span>
+                    <span class="cc-meta">@L["tap_to_choose_customer"]</span>
+                }
+            </button>
+            @if (Cart.Customer is not null) { <button class="x" title="@L["remove"]" @onclick="() => Cart.SetCustomer(null)">✕</button> }
+        </div>
+        @if (Cart.HasHeld)
+        {
+            <div class="held-bar"><span class="badge warn">@L["one_on_hold"]</span><button @onclick="Resume">@L["resume"]</button></div>
+        }
+        <div class="cart-lines">
+            @foreach (var l in Cart.Lines)
+            {
+                <div class="line @(l.Pack == PackType.Ctn ? "ctn" : "pcs")">
+                    <div class="line-info">
+                        <div class="line-name">
+                            @if (l.Unit == SellUnit.Each)
+                            {
+                                <button class="pack-badge @(l.Pack == PackType.Ctn ? "ctn" : "pcs")" title="@L["switch_pcs_ctn"]" @onclick="() => TogglePack(l)">@L.Pack(l.Pack) ⇄</button>
+                            }
+                            @L.Name(l)
+                        </div>
+                        <div class="meta">
+                            @Fmt.Money(l.Price) / @(l.Unit == SellUnit.Kg ? "kg" : L.Pack(l.Pack))
+                            @if (l.Pack == PackType.Ctn) { <span> · 1 @L["ctn"] = @l.UnitsPerPack @L["pcs"]</span> }
+                        </div>
+                    </div>
+                    <div class="qty">
+                        @if (l.Unit == SellUnit.Kg)
+                        {
+                            <button @onclick="() => AskWeight(l.ProductId, l)">@Fmt.Qty(l.Qty, l.Unit)</button>
+                        }
+                        else
+                        {
+                            <button @onclick="() => ChangeQty(l, -1)">−</button>
+                            <span>@Fmt.Num(l.Qty)</span>
+                            <button @onclick="() => ChangeQty(l, 1)">+</button>
+                        }
+                    </div>
+                    <div class="amt"><span class="num">@Fmt.Money(l.Amount)</span><button class="x" title="@L["remove"]" @onclick="() => Cart.Remove(l)">✕</button></div>
+                </div>
+            }
+            @if (Cart.IsEmpty) { <div class="empty">@L["cart_empty"]</div> }
+        </div>
+        <div class="totals">
+            <div class="row"><span>@L["subtotal"]</span><span class="num">@Fmt.Money(T.Subtotal)</span></div>
+            <div class="disc">
+                <span>@L["discount"]</span>
+                <input type="number" min="0" max="100" step="1" @bind="Cart.DiscountPct" @bind:event="oninput" /> %
+                <span class="num" style="margin-left:auto">@(T.Discount > 0 ? "−" : "")@Fmt.Money(T.Discount)</span>
+            </div>
+            @if (Pos.Settings.TaxRate > 0)
+            {
+                <div class="row"><span>@L["tax"] (@Fmt.Num(Pos.Settings.TaxRate)%)</span><span class="num">@Fmt.Money(T.Tax)</span></div>
+            }
+            <div class="row grand"><span>@L["total"]</span><span class="num">@Fmt.Money(T.Total)</span></div>
+        </div>
+        <div class="cart-actions">
+            <button class="danger" @onclick="ClearAsync">@L["clear"]</button>
+            <button @onclick="Hold">@L["hold"]</button>
+            <button class="primary pay" disabled="@Cart.IsEmpty" @onclick="OpenPayAsync">@L["pay"] (F9)</button>
+        </div>
+    </aside>
+</section>
+
+<Modal @bind-Open="_weightOpen" Title="@_weightTitle">
+    <ChildContent>
+        <label>@L["weight_kg"]</label>
+        <input id="weight" class="big" type="number" min="0.001" step="0.001" @bind="_weight" @bind:event="oninput"
+               @onkeydown="@(e => e.Key == "Enter" ? ConfirmWeightAsync() : Task.CompletedTask)" />
+        <div class="change">@(_weight > 0 && _weightProduct is not null ? Fmt.Money(_weightProduct.Price * _weight) : "")</div>
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _weightOpen = false">@L["cancel"]</button>
+        <button class="primary" @onclick="ConfirmWeightAsync">@L["add_to_sale"]</button>
+    </Actions>
+</Modal>
+
+<Modal @bind-Open="_payOpen" Title="@L["payment"]">
+    <ChildContent>
+        <div class="due">@Fmt.Money(T.Total)</div>
+        <div class="pay-customer">
+            @if (Cart.Customer is { } pc)
+            {
+                <span>👤 <b>@pc.Name</b> · @L.Term(pc.Term)@(_custBalance > 0 ? " · " + L["owes"] + " " + Fmt.Money(_custBalance) : "")</span>
+                <button @onclick="() => _pickerOpen = true">@L["change_customer"]</button>
+            }
+            else
+            {
+                <span class="muted">👤 @L["walk_in"]</span>
+                <button @onclick="() => _pickerOpen = true">@L["choose_customer"]</button>
+            }
+        </div>
+        <div class="methods">
+            @foreach (var m in new[] { "Cash", "Mobile", "Credit" })
+            {
+                <button class="@(m == _method ? "active" : "") @(m == "Credit" ? "credit" : "")" @onclick="() => SetMethod(m)">@L.Method(m)</button>
+            }
+        </div>
+        @if (_method != "Credit")
+        {
+            <label>@(_method == "Cash" ? L["cash_received"] : L["amount_paid"])</label>
+            <input id="amount" class="big" type="number" min="0" @bind="_amount" @bind:event="oninput"
+                   @onkeydown="@(e => e.Key == "Enter" && CanComplete ? CompleteAsync() : Task.CompletedTask)" />
+            <div class="quick">
+                <button @onclick="() => _amount = T.Total">@L["full"]</button>
+                <button @onclick="() => _amount = PosMath.Money(T.Total / 2)">@L["half"]</button>
+                @if (_method == "Cash")
+                {
+                    @foreach (var q in CashNotes) { <button @onclick="() => _amount = q">@Fmt.Money(q)</button> }
+                }
+            </div>
+        }
+        <div class="pay-summary">
+            <div class="ps paid"><span>@L["paid_now"]</span><b>@Fmt.Money(PaidNow)</b></div>
+            <div class="ps credit @(CreditNow > 0 ? "on" : "")"><span>@L["credit"]</span><b>@Fmt.Money(CreditNow)</b></div>
+            @if (_method == "Cash") { <div class="ps change"><span>@L["change"]</span><b>@Fmt.Money(ChangeNow)</b></div> }
+        </div>
+        @if (CreditNow > 0 && Cart.Customer is null)
+        {
+            <div class="alert danger">@L["credit_needs_customer"]</div>
+        }
+        else if (OverLimit)
+        {
+            <div class="alert warn">
+                @L.F("over_limit", Fmt.Money(Cart.Customer!.CreditLimit), Fmt.Money(_custBalance + CreditNow))
+                @if (!Auth.IsOwner) { <b> — 🔒 @L["over_limit_owner"]</b> }
+            </div>
+        }
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _payOpen = false">@L["cancel"]</button>
+        <button class="primary" disabled="@(!CanComplete || _busy)" @onclick="CompleteAsync">@L["complete_sale"]</button>
+    </Actions>
+</Modal>
+
+<Modal @bind-Open="_receiptOpen">
+    <ChildContent>
+        @if (_lastSale is not null) { <Receipt Sale="_lastSale.Value.Sale" Lines="_lastSale.Value.Lines" /> }
+    </ChildContent>
+    <Actions>
+        <button @onclick="CloseReceiptAsync">@L["new_sale"]</button>
+        <button class="primary" @onclick="PrintAsync">@L["print"]</button>
+    </Actions>
+</Modal>
+
+<CustomerPicker @bind-Open="_pickerOpen" OnSelect="OnCustomerSelected" />
+
+@code {
+    List<Product> _products = [];
+    List<string> _categories = ["*"];
+    string _cat = "*";
+    string _search = "";
+
+    bool _weightOpen, _payOpen, _receiptOpen, _pickerOpen, _busy;
+    Product? _weightProduct; CartLine? _weightLine; decimal _weight; string _weightTitle = "";
+    string _method = "Cash"; decimal? _amount;
+    decimal _custBalance;
+    (Sale Sale, List<SaleLine> Lines)? _lastSale;
+    DotNetObjectReference<Checkout>? _self;
+
+    bool Ctn => Cart.Mode == PackType.Ctn;
+    Totals T => PosMath.Compute(Cart.Lines, Cart.DiscountPct, Pos.Settings.TaxRate);
+
+    decimal PaidNow => _method == "Credit" ? 0 : Math.Min(Math.Max(0, _amount ?? 0), T.Total);
+    decimal CreditNow => T.Total - PaidNow;
+    decimal ChangeNow => _method == "Cash" ? Math.Max(0, (_amount ?? 0) - T.Total) : 0;
+    bool OverLimit => PosService.IsOverLimit(Cart.Customer, _custBalance, CreditNow);
+    bool CanComplete => !Cart.IsEmpty
+        && (_method == "Credit" || _amount is not null)
+        && (CreditNow == 0 || Cart.Customer is not null);
+
+    IEnumerable<decimal> CashNotes
+    {
+        get
+        {
+            var t = T.Total;
+            decimal[] notes = Pos.Settings.Decimals == 0 ? [1000, 5000, 10000, 50000] : [5, 10, 20, 50, 100];
+            return notes.Select(n => Math.Ceiling(t / n) * n).Where(v => v > t).Distinct().Order().Take(3);
+        }
+    }
+
+    IEnumerable<Product> Visible => _products.Where(p =>
+        (_cat == "*" || p.Category == _cat) &&
+        (_search.Length == 0 || p.Name.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || p.NameEn.Contains(_search, StringComparison.OrdinalIgnoreCase) || p.Barcode.Contains(_search)));
+
+    protected override async Task OnInitializedAsync()
+    {
+        Cart.Changed += OnCartChanged;
+        await LoadAsync();
+        await RefreshBalanceAsync();
+    }
+
+    async Task LoadAsync()
+    {
+        _products = await Pos.GetProductsAsync();
+        _categories = ["*", .. _products.Select(p => p.Category).Distinct()];
+    }
+
+    async Task RefreshBalanceAsync() => _custBalance = Cart.Customer is { } c ? await Pos.GetBalanceAsync(c.Id) : 0;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _self = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("pos.registerHotkeys", _self);
+        await JS.InvokeVoidAsync("pos.focus", "search");
+    }
+
+    void OnCartChanged() => InvokeAsync(StateHasChanged);
+
+    async Task OnCustomerSelected(Customer? c)
+    {
+        Cart.SetCustomer(c);
+        await RefreshBalanceAsync();
+        if (c?.IsWholesale == true) Ui.ShowToast(L["switched_to_ctn"]);
+    }
+
+    [JSInvokable]
+    public async Task OnHotkey(string key)
+    {
+        if (_pickerOpen) { if (key == "Escape") _pickerOpen = false; StateHasChanged(); return; }
+        switch (key)
+        {
+            case "F2": await JS.InvokeVoidAsync("pos.focus", "search"); break;
+            case "F4": Cart.ToggleMode(); await JS.InvokeVoidAsync("pos.focus", "search"); break;
+            case "F9": if (!_weightOpen && !_receiptOpen) await OpenPayAsync(); break;
+            case "Escape": _weightOpen = _payOpen = false; if (_receiptOpen) await CloseReceiptAsync(); break;
+        }
+        StateHasChanged();
+    }
+
+    async Task OnSearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter" || string.IsNullOrWhiteSpace(_search)) return;
+        var q = _search.Trim();
+        var p = _products.FirstOrDefault(x => x.Barcode == q)
+             ?? Visible.FirstOrDefault();
+        _search = "";
+        if (p is null) Ui.ShowToast(L.F("no_match", q));
+        else await AddAsync(p);
+    }
+
+    async Task AddAsync(Product p)
+    {
+        if (p.Unit == SellUnit.Kg) { await AskWeight(p.Id, null); return; }
+        if (Ctn && !p.HasCtn) Ui.ShowToast(L.F("no_ctn_added_pcs", L.Name(p)));
+        if (Cart.Add(p) is { } err) Ui.ShowToast(err);
+    }
+
+    Product ProductOf(CartLine l) => _products.First(p => p.Id == l.ProductId);
+
+    void ChangeQty(CartLine l, int delta)
+    {
+        if (Cart.SetQty(l, l.Qty + delta, ProductOf(l)) is { } err) Ui.ShowToast(err);
+    }
+
+    void TogglePack(CartLine l)
+    {
+        if (Cart.TogglePack(l, ProductOf(l)) is { } err) Ui.ShowToast(err);
+    }
+
+    async Task AskWeight(int productId, CartLine? line)
+    {
+        _weightProduct = _products.First(p => p.Id == productId);
+        _weightLine = line;
+        _weight = line?.Qty ?? 0;
+        _weightTitle = $"{L.Name(_weightProduct)} — {Fmt.Money(_weightProduct.Price)}/kg";
+        _weightOpen = true;
+        StateHasChanged();
+        await Task.Yield();
+        await JS.InvokeVoidAsync("pos.focus", "weight");
+    }
+
+    async Task ConfirmWeightAsync()
+    {
+        var kg = PosMath.R3(_weight);
+        if (kg <= 0 || _weightProduct is null) { Ui.ShowToast(L["enter_weight"]); return; }
+        var err = _weightLine is null ? Cart.Add(_weightProduct, kg, PackType.Pcs) : Cart.SetQty(_weightLine, kg, _weightProduct);
+        if (err is not null) { Ui.ShowToast(err); return; }
+        _weightOpen = false;
+        await JS.InvokeVoidAsync("pos.focus", "search");
+    }
+
+    async Task ClearAsync()
+    {
+        if (!Cart.IsEmpty && await Ui.ConfirmAsync(L["clear_sale"], L["clear_sale_q"])) { Cart.Clear(); _custBalance = 0; }
+    }
+
+    void Hold() { if (Cart.Hold() is { } err) Ui.ShowToast(err); else { _custBalance = 0; Ui.ShowToast(L["sale_on_hold"]); } }
+
+    async Task Resume()
+    {
+        if (Cart.Resume() is { } err) Ui.ShowToast(err);
+        await RefreshBalanceAsync();
+    }
+
+    async Task SetMethod(string m)
+    {
+        _method = m;
+        _amount = m == "Mobile" ? T.Total : null;
+        if (m == "Credit" && Cart.Customer is null) _pickerOpen = true;
+        StateHasChanged();
+        await Task.Yield();
+        if (m != "Credit") await JS.InvokeVoidAsync("pos.focus", "amount");
+    }
+
+    async Task OpenPayAsync()
+    {
+        if (Cart.IsEmpty) return;
+        _payOpen = true;
+        await RefreshBalanceAsync();
+        await SetMethod("Cash");
+    }
+
+    async Task CompleteAsync()
+    {
+        if (!CanComplete || _busy) return;
+        if (License.LockReason is { } locked) { Ui.ShowToast(L[locked]); return; }
+        if (Cart.DiscountPct > Pos.Settings.MaxCashierDiscount
+            && !await Auth.RequireOwnerAsync(L.F("approve_discount", Fmt.Num(Cart.DiscountPct)))) return;
+        if (OverLimit && !await Auth.RequireOwnerAsync(L.F("approve_over_limit", Cart.Customer!.Name,
+                Fmt.Money(_custBalance + CreditNow), Fmt.Money(Cart.Customer.CreditLimit)))) return;
+        _busy = true;
+        try
+        {
+            _lastSale = await Pos.CheckoutAsync(Cart, _method == "Credit" ? "Cash" : _method, _method == "Credit" ? 0 : _amount ?? 0);
+            _payOpen = false; _receiptOpen = true; _custBalance = 0;
+            await LoadAsync();
+        }
+        catch (InvalidOperationException ex) { Ui.ShowToast(ex.Message); }
+        finally { _busy = false; }
+    }
+
+    async Task PrintAsync() => await JS.InvokeVoidAsync("pos.print");
+
+    async Task CloseReceiptAsync()
+    {
+        _receiptOpen = false;
+        await JS.InvokeVoidAsync("pos.focus", "search");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Cart.Changed -= OnCartChanged;
+        try { await JS.InvokeVoidAsync("pos.unregisterHotkeys"); } catch (JSDisconnectedException) { }
+        _self?.Dispose();
+    }
+}

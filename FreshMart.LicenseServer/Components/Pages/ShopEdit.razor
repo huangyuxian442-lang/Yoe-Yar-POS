@@ -1,0 +1,203 @@
+@page "/shops/new"
+@page "/shops/{Id:int}"
+@inject LicenseDb Db
+@inject LicenseManager Licenses
+@inject NavigationManager Nav
+
+<PageTitle>@(_shop?.Name ?? "New shop")</PageTitle>
+
+@if (Id is not null && _shop is null)
+{
+    <p class="empty">Shop not found. <a href="/">Back to shops</a></p>
+    return;
+}
+
+<p><a href="/">← Shops</a></p>
+
+@if (_shop is not null)
+{
+    <div class="shop-head">
+        <div>
+            <h1>@_shop.Name @if (_shop.Suspended) { <span class="badge danger">Suspended</span> }</h1>
+            <p class="muted">Added @MmTime.Show(_shop.CreatedAt)</p>
+        </div>
+        <div class="code-box">
+            <span class="muted">Shop code — give this to the shop to activate the app</span>
+            <b class="mono">@_shop.Code</b>
+        </div>
+    </div>
+    @if (_message is not null) { <div class="alert ok">@_message</div> }
+    @if (_shop.Expired(_now))
+    {
+        <div class="alert warn">The @_shop.Plan subscription ended on @MmTime.LastDay(_shop.ExpiresAt)?.ToString("dd-MM-yyyy").
+            The shop now has Basic limits (@Plans.Base.Devices device, @Plans.Base.Cashiers cashier) until you extend it.</div>
+    }
+}
+
+<div class="grid-2">
+    <section class="card">
+        <h2>@(_shop is null ? "New shop" : "Shop and plan")</h2>
+        <EditForm Model="Form" FormName="shop" OnValidSubmit="SaveAsync" method="post">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            <label>Shop name * <span class="muted">(printed on receipts; the shop can't change it)</span>
+                <InputText @bind-Value="Form.Name" /></label>
+            <div class="row">
+                <label>Owner <InputText @bind-Value="Form.OwnerName" /></label>
+                <label>Phone <InputText @bind-Value="Form.Phone" /></label>
+            </div>
+            <label>Address <InputText @bind-Value="Form.Address" /></label>
+            <div class="row">
+                <label>Plan
+                    <InputSelect @bind-Value="Form.Plan">
+                        @foreach (var p in Plans.All)
+                        {
+                            <option value="@p">@p@(Plans.Presets.TryGetValue(p, out var l) ? $" — {l.Devices} device(s), {l.Cashiers} cashier(s)" : " — limits below")</option>
+                        }
+                    </InputSelect>
+                </label>
+                <label>Paid until (last day) <span class="muted">empty = no end</span>
+                    <InputDate @bind-Value="Form.LastDay" /></label>
+            </div>
+            <div class="row">
+                <label>Devices allowed <span class="muted">(Custom plan)</span><InputNumber @bind-Value="Form.MaxDevices" min="1" /></label>
+                <label>Cashier accounts <span class="muted">(Custom plan)</span><InputNumber @bind-Value="Form.MaxCashiers" min="0" /></label>
+            </div>
+            <label>Notes <span class="muted">(payments, support history — only you see this)</span>
+                <InputTextArea @bind-Value="Form.Notes" rows="3" /></label>
+            <p class="muted">Basic never ends. When a paid plan ends the shop drops to Basic: their first device and
+                @Plans.Base.Cashiers cashier keep working, the others stop until you extend.</p>
+            <button class="primary">@(_shop is null ? "Create shop" : "Save")</button>
+        </EditForm>
+    </section>
+
+    @if (_shop is not null)
+    {
+        <section class="card">
+            <h2>Subscription</h2>
+            <p>Plan <b>@_shop.Plan</b> · @_shop.MaxDevices device(s) · @_shop.MaxCashiers cashier account(s)<br />
+               Paid until <b>@(MmTime.LastDay(_shop.ExpiresAt)?.ToString("dd-MM-yyyy") ?? "no end")</b><br />
+               Cashier accounts in use: <b>@_shop.ActiveCashiers</b> <span class="muted">(reported by the app)</span></p>
+            <div class="actions">
+                @if (_shop.Plan != Plans.Basic)
+                {
+                    <form method="post" @formname="extend-month" @onsubmit="OpAsync"><AntiforgeryToken /><input type="hidden" name="Op" value="extend-month" /><button>+1 month</button></form>
+                    <form method="post" @formname="extend-year" @onsubmit="OpAsync"><AntiforgeryToken /><input type="hidden" name="Op" value="extend-year" /><button>+1 year</button></form>
+                }
+                @if (_shop.Suspended)
+                {
+                    <form method="post" @formname="resume" @onsubmit="OpAsync"><AntiforgeryToken /><input type="hidden" name="Op" value="resume" /><button class="primary">Resume shop</button></form>
+                }
+                else
+                {
+                    <form method="post" @formname="suspend" @onsubmit="OpAsync">
+                        <AntiforgeryToken /><input type="hidden" name="Op" value="suspend" /><button class="danger" onclick="return confirm('Suspend this shop? Its devices stop selling at their next check-in.')">Suspend</button></form>
+                }
+            </div>
+
+            <h2>Devices <span class="muted">@_shop.Devices.Count(d => d.Active) of @_shop.MaxDevices used</span></h2>
+            <table>
+                <thead><tr><th>#</th><th>Device</th><th>Activated</th><th>Last seen</th><th></th></tr></thead>
+                <tbody>
+                    @{ var n = 0; }
+                    @foreach (var d in _shop.Devices.OrderBy(d => d.RemovedAt is not null).ThenBy(d => d.ActivatedAt).ThenBy(d => d.Id))
+                    {
+                        <tr class="@(d.Active ? "" : "muted-row")">
+                            <td>@(d.Active ? (++n).ToString() : "")</td>
+                            <td>@d.Name<br /><span class="muted mono">@d.DeviceId[..Math.Min(12, d.DeviceId.Length)]… · v@(d.AppVersion)</span></td>
+                            <td>@MmTime.Show(d.ActivatedAt)</td>
+                            <td>@if (d.Active) { @MmTime.Show(d.LastSeenAt) } else { <span>Removed<br />@MmTime.Show(d.RemovedAt)</span> }</td>
+                            <td>
+                                @if (d.Active)
+                                {
+                                    <form method="post" @formname="@($"remove-{d.Id}")" @onsubmit="OpAsync">
+                                        <AntiforgeryToken /><input type="hidden" name="Op" value="remove-@d.Id" /><button class="danger small" onclick="return confirm('Remove this device? It stops selling at its next check-in and frees a slot.')">Remove</button></form>
+                                }
+                            </td>
+                        </tr>
+                    }
+                    @if (_shop.Devices.Count == 0) { <tr><td colspan="5" class="empty">Not activated yet.</td></tr> }
+                </tbody>
+            </table>
+            <p class="muted">Lost or replaced phone? Remove it here, then activate the new one with the same shop code.</p>
+        </section>
+    }
+</div>
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    [CascadingParameter] HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromForm(FormName = "shop", Name = "Form")] ShopForm? Posted { get; set; }
+    ShopForm Form = new();
+    [SupplyParameterFromForm] string? Op { get; set; }
+
+    readonly DateTime _now = DateTime.UtcNow;
+    Shop? _shop;
+    string? _message;
+    string Me => HttpContext.User.Identity?.Name ?? "?";
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Id is { } id) _shop = await Db.Shops.Include(s => s.Devices).FirstOrDefaultAsync(s => s.Id == id);
+        Form = Posted ?? (_shop is null ? new ShopForm() : new ShopForm
+        {
+            Name = _shop.Name, OwnerName = _shop.OwnerName, Phone = _shop.Phone, Address = _shop.Address, Plan = _shop.Plan,
+            MaxDevices = _shop.MaxDevices, MaxCashiers = _shop.MaxCashiers, LastDay = MmTime.LastDay(_shop.ExpiresAt), Notes = _shop.Notes,
+        });
+    }
+
+    async Task SaveAsync()
+    {
+        if (Id is not null && _shop is null) return;
+        var isNew = _shop is null;
+        var s = _shop ?? new Shop { Code = await Licenses.NewCodeAsync() };
+        s.CodeKey = FreshMart.Licensing.LicenseToken.NormalizeCode(s.Code);
+        s.Name = Form.Name.Trim();
+        s.OwnerName = Form.OwnerName?.Trim() ?? "";
+        s.Phone = Form.Phone?.Trim() ?? "";
+        s.Address = Form.Address?.Trim() ?? "";
+        s.Notes = Form.Notes?.Trim() ?? "";
+        s.Plan = Plans.All.Contains(Form.Plan) ? Form.Plan : Plans.Basic;
+        (s.MaxDevices, s.MaxCashiers) = Plans.Presets.TryGetValue(s.Plan, out var l) ? (l.Devices, l.Cashiers) : (Form.MaxDevices, Form.MaxCashiers);
+        s.ExpiresAt = s.Plan == Plans.Basic ? null : MmTime.FromLastDay(Form.LastDay);
+        if (isNew) Db.Shops.Add(s);
+        await Db.SaveChangesAsync();
+        Licenses.Log(s.Id, Me, isNew ? "shop_added" : "shop_saved",
+            $"{s.Name}: {s.Plan}, {s.MaxDevices} device(s), {s.MaxCashiers} cashier(s), until {MmTime.LastDay(s.ExpiresAt)?.ToString("dd-MM-yyyy") ?? "no end"}");
+        await Db.SaveChangesAsync();
+        if (isNew) Nav.NavigateTo($"/shops/{s.Id}");
+        _message = "Saved. Devices pick up the change at their next check-in (when they are online).";
+        Posted = null;
+        await OnInitializedAsync();
+    }
+
+    async Task OpAsync()
+    {
+        if (_shop is null || Op is null) return;
+        var s = _shop;
+        string detail;
+        switch (Op)
+        {
+            case "extend-month" or "extend-year":
+                // extend from the current end, or from today if it has already ended
+                var from = s.ExpiresAt is { } e && e > _now ? MmTime.LastDay(e)!.Value : DateOnly.FromDateTime(MmTime.Now).AddDays(-1);
+                s.ExpiresAt = MmTime.FromLastDay(Op == "extend-month" ? from.AddMonths(1) : from.AddYears(1));
+                detail = $"until {MmTime.LastDay(s.ExpiresAt):dd-MM-yyyy}";
+                break;
+            case "suspend": s.Suspended = true; detail = s.Name; break;
+            case "resume": s.Suspended = false; detail = s.Name; break;
+            default:
+                if (!Op.StartsWith("remove-") || !int.TryParse(Op[7..], out var deviceId)
+                    || s.Devices.FirstOrDefault(d => d.Id == deviceId && d.Active) is not { } device) return;
+                device.RemovedAt = DateTime.UtcNow;
+                detail = device.Name;
+                Op = "device_removed";
+                break;
+        }
+        Licenses.Log(s.Id, Me, Op.Replace('-', '_'), detail);
+        await Db.SaveChangesAsync();
+        _message = "Done. Devices pick up the change at their next check-in.";
+        Posted = null;
+        await OnInitializedAsync();
+    }
+}

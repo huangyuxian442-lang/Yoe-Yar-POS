@@ -1,0 +1,54 @@
+@page "/login"
+@attribute [AllowAnonymous]
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Authentication
+@inject LicenseDb Db
+@inject NavigationManager Nav
+
+<PageTitle>Sign in</PageTitle>
+
+<div class="card narrow">
+    <h1>Sign in</h1>
+    <EditForm Model="Form" FormName="login" OnValidSubmit="SignInAsync" method="post">
+        <DataAnnotationsValidator />
+        <label>Username <InputText @bind-Value="Form.Username" autocomplete="username" /></label>
+        <label>Password <InputText type="password" @bind-Value="Form.Password" autocomplete="current-password" /></label>
+        @if (_error is not null) { <div class="alert danger">@_error</div> }
+        <button class="primary">Sign in</button>
+    </EditForm>
+</div>
+
+@code {
+    [CascadingParameter] HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromForm(FormName = "login", Name = "Form")] LoginForm? Posted { get; set; }
+    LoginForm Form = new();
+    [SupplyParameterFromQuery] string? ReturnUrl { get; set; }
+    string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Form = Posted ?? new();
+        if (!await Db.Admins.AnyAsync()) Nav.NavigateTo("/setup");
+    }
+
+    async Task SignInAsync()
+    {
+        var name = Form.Username.Trim().ToLowerInvariant();
+        var admin = await Db.Admins.FirstOrDefaultAsync(a => a.Username == name);
+        if (admin is null || !Passwords.Verify(Form.Password, admin.PasswordHash))
+        {
+            await Task.Delay(800);   // slow down guessing
+            _error = "Wrong username or password.";
+            return;
+        }
+        var identity = new ClaimsIdentity([new Claim(ClaimTypes.Name, admin.Username)], "cookie");
+        await HttpContext.SignInAsync(new ClaimsPrincipal(identity));
+        Nav.NavigateTo(ReturnUrl is { Length: > 0 } r && r.StartsWith('/') && !r.StartsWith("//") ? r : "/");
+    }
+
+    class LoginForm
+    {
+        [Required] public string Username { get; set; } = "";
+        [Required] public string Password { get; set; } = "";
+    }
+}

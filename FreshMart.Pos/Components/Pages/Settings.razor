@@ -1,0 +1,354 @@
+@page "/settings"
+@using System.Text.Json
+@inject PosService Pos
+@inject CartService Cart
+@inject UiService Ui
+@inject FileService Files
+@inject AuthService Auth
+@inject LicenseService License
+@inject Loc L
+
+@if (!_unlocked)
+{
+    <section class="page">
+        <div class="empty">
+            <p>🔒 @L["owner_only"]</p>
+            <button class="primary" @onclick="UnlockAsync">@L["unlock_with_owner_pin"]</button>
+        </div>
+    </section>
+}
+else
+{
+<section class="page">
+    <div class="tabs">
+        @foreach (var t in new[] { "shop", "staff", "audit", "data", "license" })
+        {
+            <button class="@(_tab == t ? "active" : "")" @onclick="() => SwitchTabAsync(t)">@L["tab_" + t]</button>
+        }
+    </div>
+
+    @if (_tab == "shop")
+    {
+        <div class="form-grid">
+            <div><label>@L["store_name"]</label><input @bind="_s.Name" readonly="@License.IsActivated" /><div class="meta">@(License.IsActivated ? L["lic_name_locked"] : "")</div></div>
+            <div><label>@L["phone"]</label><input @bind="_s.Phone" /></div>
+            <div class="full"><label>@L["address_header"]</label><input @bind="_s.Address" /></div>
+            <div>
+                <label>@L["language"]</label>
+                <select @bind="_s.Language">
+                    <option value="my">မြန်မာ (Myanmar)</option>
+                    <option value="en">English</option>
+                </select>
+            </div>
+            <div><label>@L["receipt_footer"]</label><input @bind="_s.Footer" /></div>
+            <div><label>@L["currency_symbol"]</label><input @bind="_s.Currency" /></div>
+            <div>
+                <label>@L["symbol_position"]</label>
+                <select @bind="_s.SymbolAfter">
+                    <option value="true">1,500 Ks</option>
+                    <option value="false">$1,500</option>
+                </select>
+            </div>
+            <div>
+                <label>@L["decimals"]</label>
+                <select @bind="_s.Decimals">
+                    <option value="0">0 (1,500)</option>
+                    <option value="2">2 (1,500.00)</option>
+                </select>
+            </div>
+            <div><label>@L["tax_rate"]</label><input type="number" min="0" step="0.01" @bind="_s.TaxRate" /></div>
+            <div><label>@L["opening_float"]</label><input type="number" min="0" @bind="_s.OpeningFloat" /><div class="meta">@L["opening_float_hint"]</div></div>
+            <div><label>@L["max_cashier_discount"]</label><input type="number" min="0" max="100" @bind="_s.MaxCashierDiscount" /><div class="meta">@L["max_cashier_discount_hint"]</div></div>
+            <div class="full"><label>@L["payment_info"]</label><input @bind="_s.PaymentInfo" placeholder="KPay 09 xxx xxx xxx (U Aung) · Wave 09 …" /><div class="meta">@L["payment_info_hint"]</div></div>
+        </div>
+        <div class="toolbar"><button class="primary" @onclick="SaveAsync">@L["save_settings"]</button></div>
+
+        <h3>@L["shortcuts"]</h3>
+        <p class="muted">F2 — @L["sc_search"] · F4 — @L["sc_mode"] · F9 — @L["pay"] · Esc — @L["close"]</p>
+    }
+    else if (_tab == "staff")
+    {
+        <div class="toolbar">
+            <p class="muted">@L["staff_hint"] @L.F("lic_staff_count", _staff.Count(s => s.Active && !s.IsOwner), License.MaxCashiers)</p>
+            <span class="spacer"></span>
+            <button class="primary" @onclick="() => EditStaff(null)">+ @L["add_staff"]</button>
+        </div>
+        <table>
+            <thead><tr><th>@L["staff_name"]</th><th>@L["role"]</th><th>@L["status"]</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var s in _staff)
+                {
+                    <tr class="@(s.Active ? "" : "refunded")">
+                        <td class="strike"><b>@s.Name</b></td>
+                        <td><span class="badge @(s.IsOwner ? "ctn" : "pcs")">@(s.IsOwner ? L["role_owner"] : L["role_cashier"])</span></td>
+                        <td>@(s.Active ? L["active"] : L["inactive"])</td>
+                        <td class="nowrap"><button @onclick="() => EditStaff(s)">@L["edit"]</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <h3>@L["permissions"]</h3>
+        <ul class="perm-list">
+            <li>✅ @L["perm_cashier"]</li>
+            <li>🔒 @L["perm_owner"]</li>
+        </ul>
+    }
+    else if (_tab == "audit")
+    {
+        <p class="muted">@L["audit_hint"]</p>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>@L["date"]</th><th>@L["staff"]</th><th>@L["action"]</th><th>@L["detail"]</th></tr></thead>
+                <tbody>
+                    @foreach (var a in _audit)
+                    {
+                        <tr class="@(a.Action is "refund" or "over_limit" or "payment_delete" or "product_delete" or "override" or "discount" or "reset" or "restore" ? "low" : "")">
+                            <td class="nowrap">@a.At.ToString("dd-MM-yy HH:mm")</td>
+                            <td>@a.StaffName</td>
+                            <td class="nowrap">@L["audit_" + a.Action]</td>
+                            <td>@a.Detail</td>
+                        </tr>
+                    }
+                    @if (_audit.Count == 0) { <tr><td colspan="4" class="empty">@L["no_history"]</td></tr> }
+                </tbody>
+            </table>
+        </div>
+    }
+    else if (_tab == "license")
+    {
+        var lic = License.Info;
+        @if (License.LockReason is { } locked) { <div class="alert danger">⛔ @L[locked]</div> }
+        @if (lic is not null)
+        {
+            <table class="kv">
+                <tbody>
+                    <tr><th>@L["lic_shop"]</th><td><b>@lic.ShopName</b></td></tr>
+                    <tr><th>@L["act_code"]</th><td class="mono">@lic.ShopCode</td></tr>
+                    <tr><th>@L["lic_plan"]</th><td>@lic.Plan @if (License.Ended) { <span class="badge">→ Basic</span> }</td></tr>
+                    <tr><th>@L["lic_devices"]</th><td>@L.F("lic_slot", lic.DeviceSlot, License.MaxDevices)</td></tr>
+                    <tr><th>@L["lic_cashiers"]</th><td>@_activeCashiers / @License.MaxCashiers</td></tr>
+                    <tr><th>@L["lic_until"]</th><td>@(lic.ExpiresAt is { } end ? end.ToLocalTime().AddDays(-1).ToString("dd-MM-yyyy") : L["lic_no_end"])</td></tr>
+                    <tr><th>@L["lic_checked"]</th><td>@lic.IssuedAt.ToLocalTime().ToString("dd-MM-yyyy HH:mm")</td></tr>
+                    <tr><th>@L["device_id"]</th><td class="mono">@License.DeviceId[..8]</td></tr>
+                    @if (lic.Support.Length > 0) { <tr><th>@L["lic_contact"]</th><td>@lic.Support</td></tr> }
+                </tbody>
+            </table>
+            <p class="muted">@L["lic_upgrade_hint"]</p>
+            <div class="toolbar"><button class="primary" disabled="@_checking" @onclick="CheckLicenseAsync">@L["lic_check_now"]</button></div>
+        }
+        <h3>@L["lic_reactivate"]</h3>
+        <div class="toolbar">
+            <input class="code-input" @bind="_newCode" placeholder="YY-XXXX-XXXX" autocomplete="off" />
+            <button disabled="@_checking" @onclick="ReactivateAsync">@L["act_button"]</button>
+        </div>
+    }
+    else
+    {
+        <p class="muted">@L["data_hint"]</p>
+        <p>
+            <b>@L["backup_last"]:</b>
+            @(Pos.Settings.LastExportAt is { } at ? at.ToString("dd-MM-yyyy HH:mm") : "—")
+            <br /><span class="meta">@L["backup_off_hint"]</span>
+        </p>
+        <div class="toolbar">
+            <button class="primary" @onclick="BackupAsync">@L["make_backup"]</button>
+            <button @onclick="RestoreAsync">@L["restore_backup"]</button>
+            <button class="danger" @onclick="ResetAsync">@L["reset_demo"]</button>
+        </div>
+
+        <h3>@L["auto_backups"]</h3>
+        <p class="muted">@L["auto_backups_hint"]</p>
+        <div class="table-wrap">
+            <table>
+                <tbody>
+                    @foreach (var f in _autoBackups)
+                    {
+                        <tr>
+                            <td class="nowrap">@f.LastWriteTime.ToString("dd-MM-yyyy HH:mm")</td>
+                            <td class="meta">@f.Name</td>
+                            <td class="num">@(f.Length / 1024) KB</td>
+                            <td class="nowrap">
+                                <button @onclick="() => ShareAutoBackupAsync(f)">@L["share_backup"]</button>
+                                <button @onclick="() => RestoreAutoBackupAsync(f)">@L["restore"]</button>
+                            </td>
+                        </tr>
+                    }
+                    @if (_autoBackups.Count == 0) { <tr><td colspan="4" class="empty">@L["no_auto_backups"]</td></tr> }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+}
+
+<Modal @bind-Open="_staffOpen" Title="@(_editStaff.Id == 0 ? L["add_staff"] : L["edit_staff"])">
+    <ChildContent>
+        <div class="form-grid">
+            <div class="full"><label>@L["staff_name"] *</label><input @bind="_editStaff.Name" /></div>
+            <div>
+                <label>@L["role"]</label>
+                <select @bind="_editStaff.Role">
+                    <option value="@StaffRole.Cashier">@L["role_cashier"]</option>
+                    <option value="@StaffRole.Owner">@L["role_owner"]</option>
+                </select>
+            </div>
+            <div><label class="check"><input type="checkbox" @bind="_editStaff.Active" /> @L["active"]</label></div>
+            <div><label>@(_editStaff.Id == 0 ? L["pin_new"] + " *" : L["pin_change"])</label><input type="password" inputmode="numeric" maxlength="8" @bind="_pin1" /></div>
+            <div><label>@L["pin_confirm"]</label><input type="password" inputmode="numeric" maxlength="8" @bind="_pin2" /></div>
+            <div class="full meta">@L["pin_rules"]</div>
+        </div>
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _staffOpen = false">@L["cancel"]</button>
+        <button class="primary" @onclick="SaveStaffAsync">@L["save"]</button>
+    </Actions>
+</Modal>
+
+@code {
+    StoreSettings _s = new();
+    bool _unlocked;
+    List<FileInfo> _autoBackups = [];
+    string _tab = "shop";
+    List<Staff> _staff = [];
+    List<AuditEntry> _audit = [];
+    bool _staffOpen;
+    Staff _editStaff = new();
+    string _pin1 = "", _pin2 = "";
+    int _activeCashiers;
+    bool _checking;
+    string _newCode = "";
+
+    protected override void OnInitialized()
+    {
+        _unlocked = Auth.IsOwner;
+        Load();
+    }
+
+    async Task UnlockAsync() => _unlocked = await Auth.RequireOwnerAsync(L["nav_settings"]);
+
+    void Load()
+    {
+        var s = Pos.Settings;
+        _s = new StoreSettings
+        {
+            Name = s.Name, Address = s.Address, Phone = s.Phone, Currency = s.Currency, SymbolAfter = s.SymbolAfter,
+            Decimals = s.Decimals, TaxRate = s.TaxRate, Footer = s.Footer, Language = s.Language,
+            OpeningFloat = s.OpeningFloat, MaxCashierDiscount = s.MaxCashierDiscount, PaymentInfo = s.PaymentInfo,
+        };
+    }
+
+    async Task SwitchTabAsync(string t)
+    {
+        _tab = t;
+        if (t == "staff") _staff = await Auth.GetStaffAsync(includeInactive: true);
+        if (t == "audit") _audit = await Auth.GetAuditAsync();
+        if (t == "data") _autoBackups = PosService.GetAutoBackups();
+        if (t == "license") _activeCashiers = await Auth.CountActiveCashiersAsync();
+    }
+
+    async Task CheckLicenseAsync()
+    {
+        _checking = true;
+        try
+        {
+            _activeCashiers = await Auth.CountActiveCashiersAsync();
+            var err = await License.CheckInAsync(_activeCashiers);
+            await Pos.SyncShopNameAsync();
+            Load();
+            Ui.ShowToast(L[err ?? "lic_checked_ok"]);
+        }
+        finally { _checking = false; }
+    }
+
+    /// Moving this device to another shop code, or back after it was removed.
+    async Task ReactivateAsync()
+    {
+        if (!await Ui.ConfirmAsync(L["lic_reactivate"], _newCode)) return;
+        _checking = true;
+        try
+        {
+            var err = await License.ActivateAsync(_newCode);
+            if (err is null)
+            {
+                await Auth.LogAsync("license", License.Info!.ShopCode);
+                await Pos.SyncShopNameAsync();
+                Load();
+                _newCode = "";
+            }
+            Ui.ShowToast(L[err ?? "act_done"]);
+        }
+        finally { _checking = false; }
+    }
+
+    async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_s.Name)) _s.Name = "My Store";
+        _s.TaxRate = Math.Max(0, _s.TaxRate);
+        _s.MaxCashierDiscount = Math.Clamp(_s.MaxCashierDiscount, 0, 100);
+        _s.OpeningFloat = Math.Max(0, _s.OpeningFloat);
+        await Pos.SaveSettingsAsync(_s);
+        Load();
+        Ui.ShowToast(L["saved"]);
+    }
+
+    void EditStaff(Staff? s)
+    {
+        _editStaff = s is null ? new Staff { Role = StaffRole.Cashier }
+            : new Staff { Id = s.Id, Name = s.Name, Role = s.Role, Active = s.Active, PinHash = s.PinHash, PinSalt = s.PinSalt };
+        _pin1 = _pin2 = "";
+        _staffOpen = true;
+    }
+
+    async Task SaveStaffAsync()
+    {
+        if (_pin1 != _pin2) { Ui.ShowToast(L["err_pin_match"]); return; }
+        if (await Auth.SaveStaffAsync(_editStaff, _pin1) is { } err) { Ui.ShowToast(L[err]); return; }
+        _staffOpen = false;
+        _staff = await Auth.GetStaffAsync(includeInactive: true);
+        Ui.ShowToast(L["saved"]);
+    }
+
+    async Task BackupAsync()
+    {
+        Ui.ShowToast(await Files.SaveAsync($"pos-backup-{DateTime.Now:yyyy-MM-dd-HHmm}.json", await Pos.CreateBackupJsonAsync()));
+        await Pos.MarkExportedAsync();
+    }
+
+    async Task ShareAutoBackupAsync(FileInfo f)
+    {
+        Ui.ShowToast(await Files.SaveAsync(f.Name, await File.ReadAllTextAsync(f.FullName)));
+        await Pos.MarkExportedAsync();
+    }
+
+    async Task RestoreAsync()
+    {
+        var text = await Files.PickTextAsync();
+        if (text is not null) await RestoreTextAsync(text);
+    }
+
+    async Task RestoreAutoBackupAsync(FileInfo f) => await RestoreTextAsync(await File.ReadAllTextAsync(f.FullName));
+
+    async Task RestoreTextAsync(string text)
+    {
+        try
+        {
+            var backup = PosService.ParseBackup(text);
+            if (!await Ui.ConfirmAsync(L["restore_backup"], L.F("restore_q", backup.Products.Count, backup.Customers?.Count ?? 0, backup.Sales.Count))) return;
+            await Pos.RestoreAsync(backup);
+            Cart.Clear();
+            Load();
+            _autoBackups = PosService.GetAutoBackups();
+            Ui.ShowToast(L["backup_restored"]);
+        }
+        catch (JsonException) { Ui.ShowToast(L["invalid_backup"]); }
+    }
+
+    async Task ResetAsync()
+    {
+        if (!await Ui.ConfirmAsync(L["reset_demo"], L["reset_q"])) return;
+        await Pos.ResetToDemoAsync();
+        Cart.Clear();
+        Load();
+        Ui.ShowToast(L["demo_loaded"]);
+    }
+}

@@ -1,0 +1,138 @@
+﻿@inherits LayoutComponentBase
+@implements IDisposable
+@inject PosService Pos
+@inject UiService Ui
+@inject AuthService Auth
+@inject FileService Files
+@inject LicenseService License
+@inject Loc L
+
+@if (!_ready)
+{
+    <div class="empty">Loading…</div>
+}
+else if (!License.IsActivated)
+{
+    <ActivationScreen OnDone="CheckInAsync" />
+}
+else if (!_hasStaff || Auth.Current is null)
+{
+    <LoginScreen Setup="!_hasStaff" OnDone="OnLoggedIn" />
+}
+else
+{
+    <header class="topbar">
+        <h1>@Pos.Settings.Name</h1>
+        <nav>
+            <NavLink href="" Match="NavLinkMatch.All">@L["nav_checkout"]</NavLink>
+            <NavLink href="debts">@L["nav_debts"]</NavLink>
+            <NavLink href="customers">@L["nav_customers"]</NavLink>
+            <NavLink href="inventory">@L["nav_inventory"]</NavLink>
+            <NavLink href="sales">@L["nav_sales"]</NavLink>
+            <NavLink href="settings">@L["nav_settings"]</NavLink>
+        </nav>
+        <div class="lang">
+            <button class="@(L.IsMy ? "active" : "")" @onclick="@(() => Pos.SetLanguageAsync("my"))">မြန်မာ</button>
+            <button class="@(L.IsMy ? "" : "active")" @onclick="@(() => Pos.SetLanguageAsync("en"))">EN</button>
+        </div>
+        <button class="user-chip" title="@L["lock"]" @onclick="Lock">
+            👤 @Auth.CurrentName <span class="badge @(Auth.IsOwner ? "ctn" : "pcs")">@(Auth.IsOwner ? L["role_owner"] : L["role_cashier"])</span> 🔒
+        </button>
+        <span class="clock">@_now.ToString("dd-MM-yyyy  HH:mm")</span>
+    </header>
+    @if (License.LockReason is { } locked)
+    {
+        <div class="license-banner locked">
+            <span>⛔ @L[locked] @SupportText</span>
+            <a class="button" href="settings">@L["tab_license"]</a>
+        </div>
+    }
+    else if (LicenseWarning is { } warning)
+    {
+        <div class="license-banner"><span>⏳ @warning</span></div>
+    }
+    @if (BackupDue)
+    {
+        <div class="backup-banner">
+            <span>💾 @(Pos.DaysSinceExport is { } days ? L.F("backup_days", days) : L["backup_never"]) @L["backup_why"]</span>
+            <button class="primary" disabled="@_backingUp" @onclick="BackupNowAsync">@L["backup_now"]</button>
+        </div>
+    }
+    @* re-create the page when the language or user changes so every label and permission updates *@
+    <main lang="@(L.IsMy ? "my" : "en")" @key="(L.Lang, Auth.Current.Id)">@Body</main>
+}
+
+<OwnerApproval />
+<div class="toast @(Ui.Toast is null ? "" : "show")">@Ui.Toast</div>
+
+@code {
+    bool _ready, _hasStaff;
+    DateTime _now = DateTime.Now;
+    Timer? _clock, _checkin;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Ui.Changed += Refresh;
+        L.Changed += Refresh;
+        Auth.Changed += Refresh;
+        License.Changed += Refresh;
+        License.Load();
+        await Pos.InitAsync();
+        _hasStaff = await Auth.HasStaffAsync();
+        _ready = true;
+        _clock = new Timer(_ => { _now = DateTime.Now; Refresh(); }, null, 1000, 15000);
+        // pick up plan changes now and every few hours; offline is fine until the grace period runs out
+        _checkin = new Timer(_ => InvokeAsync(CheckInAsync), null, TimeSpan.Zero, TimeSpan.FromHours(4));
+    }
+
+    async Task CheckInAsync()
+    {
+        if (!License.IsActivated) return;
+        await License.CheckInAsync(await Auth.CountActiveCashiersAsync());
+        await Pos.SyncShopNameAsync();
+        StateHasChanged();
+    }
+
+    string SupportText => License.Info?.Support is { Length: > 0 } s ? $"{L["lic_contact"]}: {s}" : "";
+
+    string? LicenseWarning => License switch
+    {
+        { Ended: true, Info: { } i } => L.F("lic_ended", i.BaseDevices, i.BaseCashiers) + " " + SupportText,
+        { DaysLeft: <= LicenseService.WarnDays and { } days } => L.F("lic_expiring", days) + " " + SupportText,
+        { DaysOffline: >= LicenseService.OfflineDays - LicenseService.WarnDays and var off } => L.F("lic_offline_soon", off, LicenseService.OfflineDays - off),
+        _ => null,
+    };
+
+    async Task OnLoggedIn() => _hasStaff = await Auth.HasStaffAsync();
+
+    /// Switch user. The current sale stays in the cart for the next person.
+    void Lock() => Auth.Lock();
+
+    void Refresh() => InvokeAsync(StateHasChanged);
+
+    // remind until a backup has left this device in the last day
+    bool BackupDue => Pos.DaysSinceExport is null or > 1;
+    bool _backingUp;
+
+    async Task BackupNowAsync()
+    {
+        if (!await Auth.RequireOwnerAsync(L["backup_now"])) return;   // a backup holds all shop data
+        _backingUp = true;
+        try
+        {
+            Ui.ShowToast(await Files.SaveAsync($"pos-backup-{DateTime.Now:yyyy-MM-dd-HHmm}.json", await Pos.CreateBackupJsonAsync()));
+            await Pos.MarkExportedAsync();
+        }
+        finally { _backingUp = false; }
+    }
+
+    public void Dispose()
+    {
+        Ui.Changed -= Refresh;
+        L.Changed -= Refresh;
+        Auth.Changed -= Refresh;
+        License.Changed -= Refresh;
+        _clock?.Dispose();
+        _checkin?.Dispose();
+    }
+}

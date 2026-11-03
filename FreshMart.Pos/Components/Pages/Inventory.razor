@@ -1,0 +1,218 @@
+@page "/inventory"
+@inject PosService Pos
+@inject CartService Cart
+@inject UiService Ui
+@inject FileService Files
+@inject AuthService Auth
+@inject Loc L
+
+<section class="page">
+    <div class="toolbar">
+        <input class="filter" placeholder="@L["filter_products"]" @bind="_filter" @bind:event="oninput" />
+        <label class="check"><input type="checkbox" @bind="_lowOnly" /> @L["low_stock_only"]</label>
+        <span class="spacer"></span>
+        <button @onclick="ExportAsync">@L["export_csv"]</button>
+        <button class="primary" @onclick="() => EditAsync(null)">+ @L["add_product"]</button>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>@L["barcode"]</th><th>@L["product_name"]</th><th>@L["category"]</th>
+                    <th class="num"><span class="badge pcs">@L["pcs"]</span> @L["retail_price"]</th>
+                    <th class="num"><span class="badge ctn">@L["ctn"]</span> @L["wholesale_price"]</th>
+                    @if (Auth.IsOwner) { <th class="num">@L["cost_price"] · @L["margin"]</th> }
+                    <th class="num">@L["stock"]</th><th class="num">@L["reorder_at"]</th><th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var p in Rows)
+                {
+                    <tr class="@(p.IsLow ? "low" : "")">
+                        <td class="nowrap">@p.Barcode</td>
+                        <td>@p.Name @if (p.NameEn.Length > 0) { <div class="meta">@p.NameEn</div> }</td>
+                        <td>@p.Category</td>
+                        <td class="num">@Fmt.Money(p.Price) <span class="meta">/ @(p.Unit == SellUnit.Kg ? "kg" : L["pcs"])</span></td>
+                        <td class="num">@if (p.HasCtn) { @Fmt.Money(p.CtnPrice) <div class="meta">1 @L["ctn"] = @p.CtnQty @L["pcs"]</div> } else { <span class="muted">—</span> }</td>
+                        @if (Auth.IsOwner)
+                        {
+                            <td class="num">
+                                @if (p.Cost > 0)
+                                {
+                                    @Fmt.Money(p.Cost)
+                                    <div class="meta @(Margin(p.Price, p.Cost) < 0 ? "owe" : "")">@L["pcs"] @Pct(Margin(p.Price, p.Cost))@(p.HasCtn ? $" · {L["ctn"]} {Pct(Margin(p.CtnPrice, p.Cost * p.CtnQty))}" : "")</div>
+                                }
+                                else { <span class="badge warn">@L["no_cost"]</span> }
+                            </td>
+                        }
+                        <td class="num">
+                            @Fmt.Stock(p, L)
+                            @if (p.IsOut) { <span class="badge danger">@L["out"]</span> }
+                            else if (p.IsLow) { <span class="badge warn">@L["reorder"]</span> }
+                        </td>
+                        <td class="num">@Fmt.Num(p.ReorderLevel)</td>
+                        <td class="nowrap">
+                            <button @onclick="() => OpenReceive(p)">+ @L["stock_in"]</button>
+                            <button @onclick="() => EditAsync(p)">@L["edit"]</button>
+                            <button class="danger" @onclick="() => DeleteAsync(p)">@L["delete"]</button>
+                        </td>
+                    </tr>
+                }
+                @if (!Rows.Any()) { <tr><td colspan="9" class="empty">@L["no_products_found"]</td></tr> }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<Modal @bind-Open="_editOpen" Title="@(_edit.Id == 0 ? L["add_product"] : L["edit_product"])">
+    <ChildContent>
+        <div class="form-grid">
+            <div class="full"><label>@L["name_my"] *</label><input @bind="_edit.Name" /></div>
+            <div class="full"><label>@L["name_en"]</label><input @bind="_edit.NameEn" /></div>
+            <div><label>@L["barcode"] *</label><input @bind="_edit.Barcode" /></div>
+            <div>
+                <label>@L["category"]</label>
+                <input list="catList" @bind="_edit.Category" />
+                <datalist id="catList">@foreach (var c in _products.Select(x => x.Category).Distinct()) { <option value="@c"></option> }</datalist>
+            </div>
+            <div>
+                <label>@L["sold_by"]</label>
+                <select @bind="_edit.Unit">
+                    <option value="@SellUnit.Each">@L["sold_each"]</option>
+                    <option value="@SellUnit.Kg">@L["sold_kg"]</option>
+                </select>
+            </div>
+            <div><label><span class="badge pcs">@L["pcs"]</span> @L["retail_price"] *</label><input type="number" min="0" @bind="_edit.Price" @bind:event="oninput" /></div>
+            <div>
+                <label>@L["cost_price"] (@(_edit.Unit == SellUnit.Kg ? "kg" : L["pcs"]))</label>
+                <input type="number" min="0" @bind="_edit.Cost" @bind:event="oninput" />
+            </div>
+            <div class="meta margin-hint">
+                @if (_edit.Cost > 0 && _edit.Price > 0)
+                {
+                    <span class="@(_edit.Price < _edit.Cost ? "owe" : "")">@L["margin"] @L["pcs"]: @Fmt.Money(_edit.Price - _edit.Cost) (@Pct(Margin(_edit.Price, _edit.Cost)))</span>
+                    @if (_edit.HasCtn)
+                    {
+                        <br /><span class="@(_edit.CtnPrice < _edit.Cost * _edit.CtnQty ? "owe" : "")">@L["margin"] @L["ctn"]: @Fmt.Money(_edit.CtnPrice - _edit.Cost * _edit.CtnQty) (@Pct(Margin(_edit.CtnPrice, _edit.Cost * _edit.CtnQty)))</span>
+                    }
+                }
+                else { <span>@L["cost_hint"]</span> }
+            </div>
+            @if (_edit.Unit == SellUnit.Each)
+            {
+                <div class="full ctn-box">
+                    <div><label><span class="badge ctn">@L["ctn"]</span> @L["pcs_per_ctn"]</label><input type="number" min="0" step="1" @bind="_edit.CtnQty" @bind:event="oninput" /></div>
+                    <div><label><span class="badge ctn">@L["ctn"]</span> @L["wholesale_price"]</label><input type="number" min="0" @bind="_edit.CtnPrice" @bind:event="oninput" /></div>
+                    @if (_edit.CtnQty > 1 && _edit.CtnPrice > 0)
+                    {
+                        <div class="full meta">@L.F("ctn_per_piece", Fmt.Money(_edit.CtnPrice / _edit.CtnQty), Fmt.Money(_edit.Price * _edit.CtnQty))</div>
+                    }
+                    else { <div class="full meta">@L["ctn_hint"]</div> }
+                </div>
+            }
+            <div><label>@L["stock"] (@(_edit.Unit == SellUnit.Kg ? "kg" : L["pcs"]))</label><input type="number" step="0.001" @bind="_edit.Stock" @bind:event="oninput" /></div>
+            <div><label>@L["reorder_at"]</label><input type="number" min="0" step="1" @bind="_edit.ReorderLevel" /></div>
+            @if (_edit.HasCtn) { <div class="full meta">= @Fmt.Stock(_edit, L)</div> }
+        </div>
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _editOpen = false">@L["cancel"]</button>
+        <button class="primary" @onclick="SaveAsync">@L["save"]</button>
+    </Actions>
+</Modal>
+
+<Modal @bind-Open="_recvOpen" Title="@L["stock_in"]">
+    <ChildContent>
+        @if (_recvProduct is { } rp)
+        {
+            <p><b>@rp.Name</b> — @L["stock"]: @Fmt.Stock(rp, L)</p>
+            <div class="form-grid">
+                @if (rp.HasCtn)
+                {
+                    <div><label><span class="badge ctn">@L["ctn"]</span> (× @rp.CtnQty)</label><input class="big" type="number" min="0" step="1" @bind="_recvCtn" @bind:event="oninput" /></div>
+                }
+                <div><label><span class="badge pcs">@(rp.Unit == SellUnit.Kg ? "kg" : L["pcs"])</span></label><input class="big" type="number" min="0" step="any" @bind="_recvPcs" @bind:event="oninput" /></div>
+                @if (Auth.IsOwner)
+                {
+                    <div class="full">
+                        <label>@L["new_cost"] / @(rp.HasCtn ? L["ctn"] : rp.Unit == SellUnit.Kg ? "kg" : L["pcs"]) <span class="meta">(@L["now"]: @Fmt.Money(rp.Cost * (rp.HasCtn ? rp.CtnQty : 1)))</span></label>
+                        <input type="number" min="0" @bind="_recvCost" @bind:event="oninput" placeholder="@L["leave_blank_keep"]" />
+                    </div>
+                }
+            </div>
+            <div class="change">+ @Fmt.Pieces(RecvTotal, rp.HasCtn ? rp.CtnQty : 0, rp.Unit, L) → @Fmt.Pieces(rp.Stock + RecvTotal, rp.HasCtn ? rp.CtnQty : 0, rp.Unit, L)</div>
+        }
+    </ChildContent>
+    <Actions>
+        <button @onclick="() => _recvOpen = false">@L["cancel"]</button>
+        <button class="primary" disabled="@(RecvTotal <= 0)" @onclick="ReceiveAsync">@L["save"]</button>
+    </Actions>
+</Modal>
+
+@code {
+    List<Product> _products = [];
+    string _filter = "";
+    bool _lowOnly, _editOpen, _recvOpen;
+    Product _edit = new();
+    Product? _recvProduct; decimal _recvCtn, _recvPcs; decimal? _recvCost;
+
+    decimal RecvTotal => (_recvProduct?.HasCtn == true ? _recvCtn * _recvProduct.CtnQty : 0) + _recvPcs;
+
+    static decimal? Margin(decimal price, decimal cost) => price > 0 && cost > 0 ? (price - cost) / price * 100 : null;
+    static string Pct(decimal? m) => m is { } v ? Fmt.Num(Math.Round(v, 1), "0.#") + "%" : "—";
+
+    IEnumerable<Product> Rows => _products.Where(p =>
+        (!_lowOnly || p.IsLow) &&
+        (_filter.Length == 0 || new[] { p.Name, p.NameEn, p.Barcode, p.Category }.Any(v => v.Contains(_filter, StringComparison.OrdinalIgnoreCase))));
+
+    protected override async Task OnInitializedAsync() => _products = await Pos.GetProductsAsync();
+
+    async Task EditAsync(Product? p)
+    {
+        if (!await Auth.RequireOwnerAsync(p is null ? L["add_product"] : L["edit_product"] + " — " + p.Name)) return;
+        _edit = p is null
+            ? new Product { ReorderLevel = 5 }
+            : new Product { Id = p.Id, Barcode = p.Barcode, Name = p.Name, NameEn = p.NameEn, Category = p.Category, Price = p.Price, Cost = p.Cost,
+                            Unit = p.Unit, CtnQty = p.CtnQty, CtnPrice = p.CtnPrice, Stock = p.Stock, ReorderLevel = p.ReorderLevel };
+        _editOpen = true;
+    }
+
+    async Task SaveAsync()
+    {
+        if (await Pos.SaveProductAsync(_edit) is { } err) { Ui.ShowToast(err); return; }
+        _editOpen = false;
+        _products = await Pos.GetProductsAsync();
+        Ui.ShowToast(L["saved"]);
+    }
+
+    void OpenReceive(Product p) { _recvProduct = p; _recvCtn = 0; _recvPcs = 0; _recvCost = null; _recvOpen = true; }
+
+    async Task ReceiveAsync()
+    {
+        var p = _recvProduct!;
+        decimal? costPerPiece = _recvCost is > 0 ? _recvCost / (p.HasCtn ? p.CtnQty : 1) : null;
+        await Pos.AddStockAsync(p.Id, RecvTotal, costPerPiece);
+        _recvOpen = false;
+        _products = await Pos.GetProductsAsync();
+        Ui.ShowToast(L["saved"]);
+    }
+
+    async Task DeleteAsync(Product p)
+    {
+        if (!await Auth.RequireOwnerAsync(L["delete"] + " — " + p.Name)) return;
+        if (!await Ui.ConfirmAsync(L["delete"], L.F("delete_product_q", p.Name))) return;
+        await Pos.DeleteProductAsync(p);
+        foreach (var l in Cart.Lines.Where(l => l.ProductId == p.Id).ToList()) Cart.Remove(l);
+        _products = await Pos.GetProductsAsync();
+    }
+
+    async Task ExportAsync()
+    {
+        var csv = Fmt.Csv([
+            ["Barcode", "Name", "Name (EN)", "Category", "Price/pc", "Unit", "Pcs per CTN", "CTN price", "Stock (pcs)", "Reorder at", .. (Auth.IsOwner ? new[] { "Cost/pc" } : Array.Empty<string>())],
+            .. _products.Select(p => (object?[])[ p.Barcode, p.Name, p.NameEn, p.Category, p.Price, p.Unit == SellUnit.Kg ? "kg" : "pcs",
+                                                  p.CtnQty, p.CtnPrice, p.Stock, p.ReorderLevel, .. (Auth.IsOwner ? new object?[] { p.Cost } : Array.Empty<object?>()) ])
+        ]);
+        Ui.ShowToast(await Files.SaveAsync($"inventory-{DateTime.Now:yyyy-MM-dd}.csv", csv));
+    }
+}

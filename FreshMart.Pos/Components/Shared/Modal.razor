@@ -1,0 +1,20 @@
+@if (Open)
+{
+    <div class="modal-bg" @onclick="Close">
+        <div class="modal-box" @onclick:stopPropagation="true">
+            @if (!string.IsNullOrEmpty(Title)) { <h2>@Title</h2> }
+            @ChildContent
+            @if (Actions is not null) { <div class="actions">@Actions</div> }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<bool> OpenChanged { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+
+    Task Close() => OpenChanged.InvokeAsync(false);
+}

@@ -1,0 +1,36 @@
+@page "/activity"
+@inject LicenseDb Db
+
+<PageTitle>Activity</PageTitle>
+
+<h1>Activity</h1>
+<p class="muted">Every change to a shop or its devices, newest first (last 500).</p>
+<div class="table-wrap">
+    <table>
+        <thead><tr><th>Time</th><th>By</th><th>Shop</th><th>What</th><th>Detail</th></tr></thead>
+        <tbody>
+            @foreach (var a in _items)
+            {
+                <tr>
+                    <td class="nowrap">@MmTime.Show(a.At)</td>
+                    <td>@a.By</td>
+                    <td>@if (a.ShopId is { } id && _shops.TryGetValue(id, out var name)) { <a href="/shops/@id">@name</a> }</td>
+                    <td class="nowrap">@a.Action.Replace('_', ' ')</td>
+                    <td>@a.Detail</td>
+                </tr>
+            }
+            @if (_items.Count == 0) { <tr><td colspan="5" class="empty">Nothing yet.</td></tr> }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    List<Activity> _items = [];
+    Dictionary<int, string> _shops = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _items = await Db.Activities.AsNoTracking().OrderByDescending(a => a.At).Take(500).ToListAsync();
+        _shops = await Db.Shops.AsNoTracking().ToDictionaryAsync(s => s.Id, s => s.Name);
+    }
+}

@@ -1,0 +1,40 @@
+@page "/setup"
+@attribute [AllowAnonymous]
+@inject LicenseDb Db
+@inject LicenseManager Licenses
+@inject NavigationManager Nav
+
+<PageTitle>First admin</PageTitle>
+
+<div class="card narrow">
+    <h1>Create the first admin</h1>
+    <p class="muted">This page only works while there is no admin yet. Use a long password — this account controls every shop's licence.</p>
+    <EditForm Model="Form" FormName="setup" OnValidSubmit="CreateAsync" method="post">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+        <label>Username <InputText @bind-Value="Form.Username" autocomplete="username" /></label>
+        <label>Password (at least 10 characters) <InputText type="password" @bind-Value="Form.Password" autocomplete="new-password" /></label>
+        <label>Password again <InputText type="password" @bind-Value="Form.Confirm" autocomplete="new-password" /></label>
+        <button class="primary">Create admin</button>
+    </EditForm>
+</div>
+
+@code {
+    [SupplyParameterFromForm(FormName = "setup", Name = "Form")] AdminForm? Posted { get; set; }
+    AdminForm Form = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Form = Posted ?? new();
+        if (await Db.Admins.AnyAsync()) Nav.NavigateTo("/login");
+    }
+
+    async Task CreateAsync()
+    {
+        if (await Db.Admins.AnyAsync()) { Nav.NavigateTo("/login"); return; }
+        Db.Admins.Add(new AdminUser { Username = Form.Username.Trim().ToLowerInvariant(), PasswordHash = Passwords.Hash(Form.Password) });
+        Licenses.Log(null, Form.Username, "admin_added", Form.Username);
+        await Db.SaveChangesAsync();
+        Nav.NavigateTo("/login");
+    }
+}

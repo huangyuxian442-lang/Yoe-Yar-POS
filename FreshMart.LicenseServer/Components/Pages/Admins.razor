@@ -1,0 +1,85 @@
+@page "/admins"
+@inject LicenseDb Db
+@inject LicenseManager Licenses
+
+<PageTitle>Admins</PageTitle>
+
+<h1>Admins</h1>
+<p class="muted">People who can sign in here. Every admin can change every shop.</p>
+@if (_message is not null) { <div class="alert ok">@_message</div> }
+
+<div class="grid-2">
+    <section class="card">
+        <table>
+            <thead><tr><th>Username</th><th>Added</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var a in _admins)
+                {
+                    <tr>
+                        <td><b>@a.Username</b> @if (a.Username == Me) { <span class="muted">(you)</span> }</td>
+                        <td class="nowrap">@MmTime.Show(a.CreatedAt)</td>
+                        <td>
+                            @if (a.Username != Me)
+                            {
+                                <form method="post" @formname="@($"del-{a.Id}")" @onsubmit="DeleteAsync">
+                                    <AntiforgeryToken /><input type="hidden" name="DeleteId" value="@a.Id" /><button class="danger small" onclick="return confirm('Remove this admin?')">Remove</button></form>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </section>
+    <section class="card">
+        <h2>Add an admin, or set a new password</h2>
+        <p class="muted">Use an existing username to change that admin's password.</p>
+        <EditForm Model="Form" FormName="admin" OnValidSubmit="SaveAsync" method="post">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+            <label>Username <InputText @bind-Value="Form.Username" autocomplete="off" /></label>
+            <label>Password (at least 10 characters) <InputText type="password" @bind-Value="Form.Password" autocomplete="new-password" /></label>
+            <label>Password again <InputText type="password" @bind-Value="Form.Confirm" autocomplete="new-password" /></label>
+            <button class="primary">Save</button>
+        </EditForm>
+    </section>
+</div>
+
+@code {
+    [CascadingParameter] HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromForm(FormName = "admin", Name = "Form")] AdminForm? Posted { get; set; }
+    AdminForm Form = new();
+    [SupplyParameterFromForm] int? DeleteId { get; set; }
+
+    List<AdminUser> _admins = [];
+    string? _message;
+    string Me => HttpContext.User.Identity?.Name ?? "?";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Form = Posted ?? new();
+        _admins = await Db.Admins.OrderBy(a => a.Username).ToListAsync();
+    }
+
+    async Task SaveAsync()
+    {
+        var name = Form.Username.Trim().ToLowerInvariant();
+        var admin = _admins.FirstOrDefault(a => a.Username == name);
+        if (admin is null) Db.Admins.Add(admin = new AdminUser { Username = name });
+        admin.PasswordHash = Passwords.Hash(Form.Password);
+        Licenses.Log(null, Me, admin.Id == 0 ? "admin_added" : "admin_password", name);
+        await Db.SaveChangesAsync();
+        _message = $"Saved {name}.";
+        Form = new();
+        _admins = await Db.Admins.OrderBy(a => a.Username).ToListAsync();
+    }
+
+    async Task DeleteAsync()
+    {
+        if (_admins.FirstOrDefault(a => a.Id == DeleteId) is not { } admin || admin.Username == Me) return;
+        Db.Admins.Remove(admin);
+        Licenses.Log(null, Me, "admin_removed", admin.Username);
+        await Db.SaveChangesAsync();
+        _admins.Remove(admin);
+        _message = $"Removed {admin.Username}.";
+    }
+}

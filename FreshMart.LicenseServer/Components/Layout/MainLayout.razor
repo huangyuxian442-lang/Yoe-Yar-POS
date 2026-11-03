@@ -1,0 +1,18 @@
+@inherits LayoutComponentBase
+
+<header class="topbar">
+    <a class="brand" href="/">Yoe Yar POS · Shops</a>
+    <AuthorizeView>
+        <nav>
+            <NavLink href="/" Match="NavLinkMatch.All">Shops</NavLink>
+            <NavLink href="/shops/new">+ New shop</NavLink>
+            <NavLink href="/activity">Activity</NavLink>
+            <NavLink href="/admins">Admins</NavLink>
+        </nav>
+        <form method="post" action="/logout" class="logout">
+            <span class="muted">@context.User.Identity?.Name</span>
+            <button>Sign out</button>
+        </form>
+    </AuthorizeView>
+</header>
+<main>@Body</main>

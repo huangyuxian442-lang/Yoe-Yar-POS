@@ -1,0 +1,30 @@
+@implements IDisposable
+@inject AuthService Auth
+@inject Loc L
+
+@if (Auth.PendingApproval is { } action)
+{
+    <div class="modal-bg top" @onclick="Auth.CancelApproval">
+        <div class="modal-box" @onclick:stopPropagation="true">
+            <h2>🔒 @L["owner_approval"]</h2>
+            <p>@L.F("owner_approval_hint", action)</p>
+            <PinPad Id="ownerPin" OnSubmit="ApproveAsync" />
+            @if (_error) { <div class="alert danger">@L["wrong_pin"]</div> }
+            <div class="actions"><button @onclick="Auth.CancelApproval">@L["cancel"]</button></div>
+        </div>
+    </div>
+}
+
+@code {
+    bool _error;
+
+    // this component has no parameters, so it must re-render itself when an approval is requested
+    protected override void OnInitialized() => Auth.Changed += OnChanged;
+    void OnChanged() { _error = false; InvokeAsync(StateHasChanged); }
+    public void Dispose() => Auth.Changed -= OnChanged;
+
+    async Task ApproveAsync(string pin)
+    {
+        _error = !await Auth.ApproveAsync(pin);
+    }
+}

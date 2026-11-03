@@ -1,0 +1,88 @@
+@inject AuthService Auth
+@inject PosService Pos
+@inject Loc L
+
+<div class="login">
+    <div class="login-box">
+        <div class="login-lang lang">
+            <button class="@(L.IsMy ? "active" : "")" @onclick="@(() => Pos.SetLanguageAsync("my"))">မြန်မာ</button>
+            <button class="@(L.IsMy ? "" : "active")" @onclick="@(() => Pos.SetLanguageAsync("en"))">EN</button>
+        </div>
+        <h1>@Pos.Settings.Name</h1>
+
+        @if (Setup)
+        {
+            <h2>@L["setup_owner"]</h2>
+            <p class="muted">@L["setup_owner_hint"]</p>
+            <div class="form-grid one">
+                <div><label>@L["staff_name"]</label><input id="ownerName" @bind="_name" /></div>
+                <div><label>@L["pin_new"]</label><input type="password" inputmode="numeric" maxlength="8" @bind="_pin1" /></div>
+                <div><label>@L["pin_confirm"]</label><input type="password" inputmode="numeric" maxlength="8" @bind="_pin2" /></div>
+            </div>
+            @if (_error is not null) { <div class="alert danger">@_error</div> }
+            <div class="actions"><button class="primary big-btn" @onclick="CreateOwnerAsync">@L["setup_start"]</button></div>
+        }
+        else if (_who is null)
+        {
+            <h2>@L["who_are_you"]</h2>
+            <div class="staff-pick">
+                @foreach (var s in _staff)
+                {
+                    <button @onclick="() => PickAsync(s)">
+                        <span class="sp-name">@s.Name</span>
+                        <span class="badge @(s.IsOwner ? "ctn" : "pcs")">@(s.IsOwner ? L["role_owner"] : L["role_cashier"])</span>
+                    </button>
+                }
+            </div>
+            @if (_error is not null) { <div class="alert danger">@_error</div> }
+        }
+        else
+        {
+            <h2>@_who.Name</h2>
+            <p class="muted">@L["enter_pin"]</p>
+            <PinPad Id="loginPin" OnSubmit="LoginAsync" />
+            @if (_error is not null) { <div class="alert danger">@_error</div> }
+            <div class="actions"><button @onclick="() => { _who = null; _error = null; }">@L["back"]</button></div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool Setup { get; set; }
+    [Parameter] public EventCallback OnDone { get; set; }
+
+    List<Staff> _staff = [];
+    Staff? _who;
+    string? _error;
+    string _name = "", _pin1 = "", _pin2 = "";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!Setup) _staff = await Auth.GetStaffAsync();
+        if (_staff.Count == 1) _who = _staff[0];
+    }
+
+    async Task PickAsync(Staff s)
+    {
+        _error = null;
+        if (await Auth.WithinPlanAsync(s)) _who = s;
+        else _error = L["lic_staff_over"];
+    }
+
+    async Task LoginAsync(string pin)
+    {
+        if (_who is null) return;
+        if (!await Auth.WithinPlanAsync(_who)) { _error = L["lic_staff_over"]; return; }
+        if (await Auth.LoginAsync(_who, pin)) { _who = null; _error = null; await OnDone.InvokeAsync(); }
+        else _error = L["wrong_pin"];
+    }
+
+    async Task CreateOwnerAsync()
+    {
+        if (_pin1 != _pin2) { _error = L["err_pin_match"]; return; }
+        var owner = new Staff { Name = _name, Role = StaffRole.Owner };
+        if (await Auth.SaveStaffAsync(owner, _pin1) is { } err) { _error = L[err]; return; }
+        await Auth.LoginAsync(owner, _pin1);
+        await OnDone.InvokeAsync();
+    }
+}
