@@ -82,6 +82,7 @@ Database__Provider=postgres
 ConnectionStrings__Licenses=Host=127.0.0.1;Database=licenses;Username=yoeyar;Password=$db_pass
 License__SigningKeyPath=$CONF_DIR/license-signing-key.pem
 License__RequireExistingKey=true
+License__ServerUrl=https://$domain
 DataProtection__KeysPath=$DATA_DIR/dp-keys
 Vendor__Support=$support
 EOF

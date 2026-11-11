@@ -76,6 +76,28 @@ below for you (PostgreSQL, HTTPS, service, nightly backups). The same scripts wo
 5. **Database changes:** the server creates its tables on first start. Before changing `Data/LicenseDb.cs` after go-live,
    switch to EF Core migrations so existing data is kept.
 
+## Moving to another server (no reinstall at shops)
+
+Every licence carries the address its device should check in at next (`License:ServerUrl` on the server). It's part of the
+signed licence, so nobody can redirect shops to a fake server. To move, for example from a free laptop address to
+`https://license.yoeyar.com` on Z.com:
+
+1. **Set up the new server** with the **same signing key** and a copy of the database:
+   - PostgreSQL: `pg_dump`, then restore (`deploy/ZCOM-GUIDE.md` → Backups).
+   - SQLite: stop the old server first, then copy `licenses.db`.
+2. On the **new** server, set `License:ServerUrl` to its own address. The Z.com setup does this for you.
+3. On the **old** server, set `License:ServerUrl` to the **new** address and restart it. In `appsettings.json`:
+   ```json
+   "License": { "ServerUrl": "https://license.yoeyar.com" }
+   ```
+4. Keep the old server running. Each device switches at its next check-in (when the app starts, then every 4 hours online).
+   Settings → Licence → **Licence server** shows the address a device uses.
+5. Once the new admin panel shows every device's **Last seen** after the move date (allow about 30 days for shops that are rarely online), switch the old server off.
+6. Set `DefaultServer` in `LicenseService.cs` to the new address and rebuild, so **new** installs activate there.
+
+If the new address can't be reached, the app falls back to its built-in address, so a mistake in step 3 doesn't strand shops.
+Only `https://` addresses are accepted (plain `http://` only to the same PC, for testing).
+
 ## Limits to know
 - A shop that never connects again keeps selling for up to 30 days after its last check-in.
 - Setting the device clock back is detected (more than 1 day behind the last time the app saw), and selling stops until the clock is fixed and the device goes online.

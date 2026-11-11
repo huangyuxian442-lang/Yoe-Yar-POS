@@ -22,6 +22,8 @@ public record LicenseInfo
     public DateTime IssuedAt { get; init; }           // UTC, last time the server confirmed this licence
     public string Status { get; init; } = LicenseStatus.Active;
     public string Support { get; init; } = "";        // how to reach the seller, shown in the app
+    public string ServerUrl { get; init; } = "";      // where the app checks in next time; "" = keep the current address.
+                                                      // Lets the seller move servers without reinstalling the app.
 
     public bool SubscriptionEnded(DateTime utcNow) => ExpiresAt is { } end && utcNow >= end;
 }

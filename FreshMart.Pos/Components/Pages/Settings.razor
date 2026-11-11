@@ -130,6 +130,7 @@ else
                     <tr><th>@L["lic_until"]</th><td>@(lic.ExpiresAt is { } end ? end.ToLocalTime().AddDays(-1).ToString("dd-MM-yyyy") : L["lic_no_end"])</td></tr>
                     <tr><th>@L["lic_checked"]</th><td>@lic.IssuedAt.ToLocalTime().ToString("dd-MM-yyyy HH:mm")</td></tr>
                     <tr><th>@L["device_id"]</th><td class="mono">@License.DeviceId[..8]</td></tr>
+                    <tr><th>@L["lic_server"]</th><td class="mono">@License.Server</td></tr>
                     @if (lic.Support.Length > 0) { <tr><th>@L["lic_contact"]</th><td>@lic.Support</td></tr> }
                 </tbody>
             </table>

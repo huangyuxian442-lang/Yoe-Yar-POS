@@ -15,13 +15,22 @@ public class LicenseService
     // public key of the licence server (`dotnet run -- --public-key` in FreshMart.LicenseServer)
     const string PublicKey = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEf5uYF9gPqXB3nLYZtB8KnxtIbFDts11Nf9IkRMr3zdnWmrcl6Kc7VRGOS8+rNyBqYxNZ6w8oL23zY0aWQRvFUw==";
     // TODO before release: your hosted server's https address. FRESHMART_LICENSE_URL overrides it for testing.
+    // Only new activations use it once a device has a licence: after that the licence says where to check in.
     const string DefaultServer = "http://localhost:5080";
 
     public const int OfflineDays = 30;    // selling continues this long without reaching the server
     public const int WarnDays = 7;
 
-    public static string ServerUrl => Environment.GetEnvironmentVariable("FRESHMART_LICENSE_URL") is { Length: > 0 } url
+    static string BuiltInServer => Environment.GetEnvironmentVariable("FRESHMART_LICENSE_URL") is { Length: > 0 } url
         ? url.TrimEnd('/') : DefaultServer;
+
+    /// Where this device checks in: the address in its latest signed licence, so the seller can move
+    /// servers without a reinstall; otherwise the built-in one.
+    public string Server => Info?.ServerUrl is { Length: > 0 } url && IsAllowedServer(url) ? url : BuiltInServer;
+
+    /// https only, except plain http to this machine while testing.
+    static bool IsAllowedServer(string url) => Uri.TryCreate(url, UriKind.Absolute, out var u)
+        && (u.Scheme == Uri.UriSchemeHttps || (u.Scheme == Uri.UriSchemeHttp && u.IsLoopback));
 
     static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(15) };
     readonly ECDsa _key = LicenseToken.PublicKey(PublicKey);
@@ -90,7 +99,7 @@ public class LicenseService
     public async Task<string?> ActivateAsync(string code)
     {
         if (LicenseToken.NormalizeCode(code).Length < 6) return "lic_err_code_not_found";
-        var (token, error) = await PostAsync("activate", JsonContent.Create(
+        var (token, error) = await PostAsync("activate", () => JsonContent.Create(
             new ActivateRequest(code.Trim(), DeviceId, DeviceName, AppVersion), LicenseJson.Default.ActivateRequest));
         if (error is not null) return error;
         var info = Accept(token);
@@ -105,7 +114,7 @@ public class LicenseService
     public async Task<string?> CheckInAsync(int activeCashiers)
     {
         if (Info is null) return "lic_not_activated";
-        var (token, error) = await PostAsync("checkin", JsonContent.Create(
+        var (token, error) = await PostAsync("checkin", () => JsonContent.Create(
             new CheckinRequest(Info.ShopCode, DeviceId, AppVersion, activeCashiers), LicenseJson.Default.CheckinRequest));
         if (error is not null) return error;
         var info = Accept(token);
@@ -116,11 +125,19 @@ public class LicenseService
         return null;
     }
 
-    async Task<(string? Token, string? Error)> PostAsync(string path, HttpContent body)
+    /// Tries this device's server; if that can't be reached, the built-in one (e.g. a new address that isn't live yet).
+    async Task<(string? Token, string? Error)> PostAsync(string path, Func<HttpContent> body)
+    {
+        var result = await PostToAsync(Server, path, body());
+        if (result.Error == "lic_err_offline" && Server != BuiltInServer) result = await PostToAsync(BuiltInServer, path, body());
+        return result;
+    }
+
+    static async Task<(string? Token, string? Error)> PostToAsync(string server, string path, HttpContent body)
     {
         try
         {
-            using var res = await Http.PostAsync($"{ServerUrl}/api/v1/{path}", body);
+            using var res = await Http.PostAsync($"{server}/api/v1/{path}", body);
             var r = await res.Content.ReadFromJsonAsync(LicenseJson.Default.LicenseResponse);
             return r?.Token is { } t ? (t, null) : (null, "lic_err_" + (r?.Error ?? "invalid"));
         }
@@ -128,6 +145,7 @@ public class LicenseService
         {
             return (null, "lic_err_offline");
         }
+        finally { body.Dispose(); }
     }
 
     static string AppVersion => AppInfo.Current.VersionString;

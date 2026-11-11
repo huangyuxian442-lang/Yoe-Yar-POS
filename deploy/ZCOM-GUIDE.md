@@ -65,6 +65,14 @@ The setup page closes once an admin exists.
    ```
 3. Test once: install on your own phone, add a test shop in the admin panel, activate with its code.
 
+## Coming from a free or laptop server?
+
+If shops already activated on another address (for example your laptop), they don't need a reinstall. Follow
+**"Moving to another server"** in `LICENSING.md`:
+- Restore your database here.
+- On the old server, set `License:ServerUrl` to `https://license.yoeyar.com`.
+- Keep the old server on until every device has checked in here.
+
 ## Updating the server later
 
 After changing the server code (or pulling a new version from GitHub):

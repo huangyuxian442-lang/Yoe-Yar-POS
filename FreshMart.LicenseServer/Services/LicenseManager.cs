@@ -95,6 +95,8 @@ public class LicenseManager(LicenseDb db, SigningKey signing, IConfiguration con
             IssuedAt = now,
             Status = status ?? (shop.Suspended ? LicenseStatus.Suspended : LicenseStatus.Active),
             Support = config["Vendor:Support"] ?? "",
+            // this server's public address; set it to the NEW address while moving servers (LICENSING.md)
+            ServerUrl = (config["License:ServerUrl"] ?? "").Trim().TrimEnd('/'),
         }, signing.Key);
     }
 
